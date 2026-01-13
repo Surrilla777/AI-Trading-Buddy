@@ -6709,40 +6709,57 @@
             }, []);
 
             // Sync alerts to server whenever they change (for background notifications)
+            const syncAlertsToServer = async () => {
+                const token = fcmToken || localStorage.getItem('fcmToken');
+                if (!token) {
+                    console.log('[Sync] No FCM token - skipping sync');
+                    return;
+                }
+
+                const activeAlerts = customAlerts.filter(a => a.active).map(a => ({
+                    id: a.id,
+                    ticker: a.ticker,
+                    type: a.type,
+                    value: parseFloat(a.value)
+                }));
+
+                console.log('[Sync] Syncing', activeAlerts.length, 'alerts to server with token:', token.substring(0, 20) + '...');
+
+                try {
+                    const response = await fetch('/api/register-push-token', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ token, alerts: activeAlerts })
+                    });
+                    const result = await response.json();
+                    console.log('[Sync] Server response:', result);
+                } catch (err) {
+                    console.log('[Sync] Failed to sync:', err.message);
+                }
+            };
+
+            // Sync when alerts change
             useEffect(() => {
-                const syncAlertsToServer = async () => {
-                    const token = fcmToken || localStorage.getItem('fcmToken');
-                    if (!token) {
-                        console.log('[Sync] No FCM token - skipping sync');
-                        return;
-                    }
-
-                    const activeAlerts = customAlerts.filter(a => a.active).map(a => ({
-                        id: a.id,
-                        ticker: a.ticker,
-                        type: a.type,
-                        value: parseFloat(a.value)
-                    }));
-
-                    console.log('[Sync] Syncing', activeAlerts.length, 'alerts to server');
-
-                    try {
-                        const response = await fetch('/api/register-push-token', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ token, alerts: activeAlerts })
-                        });
-                        const result = await response.json();
-                        console.log('[Sync] Server response:', result);
-                    } catch (err) {
-                        console.log('[Sync] Failed to sync:', err.message);
-                    }
-                };
-
-                // Debounce sync by 1 second to avoid too many requests
                 const timeoutId = setTimeout(syncAlertsToServer, 1000);
                 return () => clearTimeout(timeoutId);
-            }, [customAlerts, fcmToken]);
+            }, [customAlerts]);
+
+            // Also sync when FCM token becomes available
+            useEffect(() => {
+                if (fcmToken) {
+                    console.log('[Sync] FCM token available, syncing alerts...');
+                    syncAlertsToServer();
+                }
+            }, [fcmToken]);
+
+            // Force sync on page load after 3 seconds (gives Firebase time to init)
+            useEffect(() => {
+                const timeoutId = setTimeout(() => {
+                    console.log('[Sync] Delayed page load sync...');
+                    syncAlertsToServer();
+                }, 3000);
+                return () => clearTimeout(timeoutId);
+            }, []);
 
             // Get only enabled patterns
             const getEnabledPatterns = () => {
