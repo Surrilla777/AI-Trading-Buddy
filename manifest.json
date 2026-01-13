@@ -1,0 +1,31 @@
+{
+  "name": "AI Trading Buddy",
+  "short_name": "TradeBuddy",
+  "description": "Your AI-powered trading companion with real-time alerts and Voice of Logic",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1a1a2e",
+  "theme_color": "#3b82f6",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["finance", "productivity"],
+  "shortcuts": [
+    {
+      "name": "Add Position",
+      "url": "/?action=add",
+      "description": "Add a new trading position"
+    },
+    {
+      "name": "Alerts",
+      "url": "/?action=alerts",
+      "description": "View and manage alerts"
+    }
+  ]
+}

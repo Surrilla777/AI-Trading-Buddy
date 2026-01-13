@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Environment files
+.env
+.env.local
+.env.production
+
+# Push notification tokens (contains user data)
+push-tokens.json
+
+# Firebase service account (sensitive)
+firebase-service-account.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Temp files
+*.tmp
+*.temp
+
+# Nested duplicate folders (cleanup)
+Userssurriai-trading-buddy/
