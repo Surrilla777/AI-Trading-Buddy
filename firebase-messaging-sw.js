@@ -4,15 +4,14 @@
 importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js');
 
-// Firebase config - will be injected during build/deploy
-// For now, placeholder that gets replaced
+// Firebase config - AI Trading Buddy
 const firebaseConfig = {
-    apiKey: "YOUR_API_KEY",
-    authDomain: "YOUR_PROJECT.firebaseapp.com",
-    projectId: "YOUR_PROJECT_ID",
-    storageBucket: "YOUR_PROJECT.appspot.com",
-    messagingSenderId: "YOUR_SENDER_ID",
-    appId: "YOUR_APP_ID"
+    apiKey: "AIzaSyAgfBV-YPkq7lJSEECw2b8zowCIKhuTGf8",
+    authDomain: "ai-trading-buddy-dc686.firebaseapp.com",
+    projectId: "ai-trading-buddy-dc686",
+    storageBucket: "ai-trading-buddy-dc686.firebasestorage.app",
+    messagingSenderId: "803599636392",
+    appId: "1:803599636392:web:16d7be694fc35cef822f9d"
 };
 
 firebase.initializeApp(firebaseConfig);
