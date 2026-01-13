@@ -794,7 +794,7 @@ server.listen(PORT, '0.0.0.0', () => {
 const serverPriceCache = {};
 const PRICE_CACHE_TTL = 15000; // 15 seconds
 
-// Fetch stock price (server-side)
+// Fetch stock price (server-side) - uses 1-minute data for real-time accuracy
 const fetchStockPrice = (ticker) => {
     return new Promise((resolve) => {
         // Check cache first
@@ -804,7 +804,8 @@ const fetchStockPrice = (ticker) => {
             return;
         }
 
-        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d`;
+        // Use 1-minute interval for more accurate real-time price
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1m&range=1d`;
 
         https.get(url, {
             headers: {
@@ -816,18 +817,42 @@ const fetchStockPrice = (ticker) => {
             response.on('end', () => {
                 try {
                     const json = JSON.parse(data);
-                    const price = json.chart?.result?.[0]?.meta?.regularMarketPrice;
-                    if (price) {
+                    const result = json.chart?.result?.[0];
+
+                    // Try multiple sources for the price, in order of accuracy
+                    let price = result?.meta?.regularMarketPrice;
+
+                    // Fallback: get the most recent close from the chart data
+                    if (!price || price < 100) {
+                        const closes = result?.indicators?.quote?.[0]?.close;
+                        if (closes && closes.length > 0) {
+                            // Get the last non-null close price
+                            for (let i = closes.length - 1; i >= 0; i--) {
+                                if (closes[i] !== null) {
+                                    price = closes[i];
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if (price && price > 0) {
+                        console.log(`[Price] ${ticker}: $${price.toFixed(2)}`);
                         serverPriceCache[ticker] = { price, timestamp: Date.now() };
                         resolve(price);
                     } else {
+                        console.log(`[Price] ${ticker}: No valid price found`);
                         resolve(null);
                     }
                 } catch (e) {
+                    console.log(`[Price] ${ticker}: Parse error - ${e.message}`);
                     resolve(null);
                 }
             });
-        }).on('error', () => resolve(null));
+        }).on('error', (e) => {
+            console.log(`[Price] ${ticker}: Fetch error - ${e.message}`);
+            resolve(null);
+        });
     });
 };
 
