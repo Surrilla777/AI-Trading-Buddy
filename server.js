@@ -513,6 +513,146 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    // ===== TECHNICAL SCREENER ENDPOINT =====
+    // Scans major stocks for technical indicator signals
+    if (url.pathname === '/api/technical-screener') {
+        const screenType = url.searchParams.get('type') || 'rsi_oversold';
+
+        // Major stocks to scan (popular large caps)
+        const SCREENER_STOCKS = [
+            'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'AMD', 'NFLX', 'CRM',
+            'ORCL', 'ADBE', 'INTC', 'CSCO', 'AVGO', 'TXN', 'QCOM', 'MU', 'AMAT', 'LRCX',
+            'JPM', 'BAC', 'WFC', 'GS', 'MS', 'C', 'BLK', 'SCHW', 'AXP', 'V', 'MA', 'PYPL',
+            'JNJ', 'UNH', 'PFE', 'MRK', 'ABBV', 'LLY', 'TMO', 'ABT', 'DHR', 'BMY',
+            'XOM', 'CVX', 'COP', 'SLB', 'EOG', 'OXY', 'MPC', 'VLO', 'PSX', 'HAL',
+            'DIS', 'CMCSA', 'NFLX', 'T', 'VZ', 'TMUS',
+            'WMT', 'COST', 'HD', 'LOW', 'TGT', 'AMZN', 'SBUX', 'MCD', 'NKE', 'LULU',
+            'BA', 'CAT', 'DE', 'HON', 'UPS', 'FDX', 'RTX', 'LMT', 'GE', 'MMM',
+            'KO', 'PEP', 'PG', 'CL', 'KMB', 'MO', 'PM',
+            'SPY', 'QQQ', 'IWM', 'DIA', 'VTI', 'ARKK',
+            'COIN', 'MARA', 'RIOT', 'MSTR', 'SQ', 'HOOD', 'SOFI', 'AFRM', 'UPST',
+            'PLTR', 'SNOW', 'DDOG', 'NET', 'ZS', 'CRWD', 'PANW', 'OKTA', 'MDB', 'TEAM'
+        ];
+
+        // Remove duplicates
+        const uniqueStocks = [...new Set(SCREENER_STOCKS)];
+
+        console.log(`[Technical Screener] Scanning ${uniqueStocks.length} stocks for: ${screenType}`);
+
+        const results = [];
+        const batchSize = 10;
+
+        const scanStock = async (ticker) => {
+            try {
+                const indicators = await getTechnicalIndicators(ticker);
+                if (!indicators) return null;
+
+                let match = false;
+                let signal = '';
+                let value = '';
+
+                switch (screenType) {
+                    case 'rsi_oversold':
+                        if (indicators.rsi && indicators.rsi <= 30) {
+                            match = true;
+                            signal = 'RSI Oversold';
+                            value = `RSI: ${indicators.rsi.toFixed(1)}`;
+                        }
+                        break;
+                    case 'rsi_overbought':
+                        if (indicators.rsi && indicators.rsi >= 70) {
+                            match = true;
+                            signal = 'RSI Overbought';
+                            value = `RSI: ${indicators.rsi.toFixed(1)}`;
+                        }
+                        break;
+                    case 'golden_cross':
+                        if (indicators.crossType === 'golden') {
+                            match = true;
+                            signal = 'Golden Cross';
+                            value = '50 SMA > 200 SMA';
+                        }
+                        break;
+                    case 'death_cross':
+                        if (indicators.crossType === 'death') {
+                            match = true;
+                            signal = 'Death Cross';
+                            value = '50 SMA < 200 SMA';
+                        }
+                        break;
+                    case 'near_sma_50':
+                        if (indicators.sma50Distance !== null && Math.abs(indicators.sma50Distance) <= 2) {
+                            match = true;
+                            const dir = indicators.sma50Distance >= 0 ? 'above' : 'below';
+                            signal = 'Near 50 SMA';
+                            value = `${Math.abs(indicators.sma50Distance).toFixed(1)}% ${dir}`;
+                        }
+                        break;
+                    case 'near_sma_200':
+                        if (indicators.sma200Distance !== null && Math.abs(indicators.sma200Distance) <= 2) {
+                            match = true;
+                            const dir = indicators.sma200Distance >= 0 ? 'above' : 'below';
+                            signal = 'Near 200 SMA';
+                            value = `${Math.abs(indicators.sma200Distance).toFixed(1)}% ${dir}`;
+                        }
+                        break;
+                    case 'above_sma_200':
+                        if (indicators.sma200Distance !== null && indicators.sma200Distance > 0) {
+                            match = true;
+                            signal = 'Above 200 SMA';
+                            value = `${indicators.sma200Distance.toFixed(1)}% above`;
+                        }
+                        break;
+                    case 'below_sma_200':
+                        if (indicators.sma200Distance !== null && indicators.sma200Distance < 0) {
+                            match = true;
+                            signal = 'Below 200 SMA';
+                            value = `${Math.abs(indicators.sma200Distance).toFixed(1)}% below`;
+                        }
+                        break;
+                }
+
+                if (match) {
+                    return {
+                        ticker,
+                        price: indicators.price?.toFixed(2),
+                        signal,
+                        value,
+                        rsi: indicators.rsi?.toFixed(1),
+                        sma50: indicators.sma50?.toFixed(2),
+                        sma200: indicators.sma200?.toFixed(2),
+                        sma50Dist: indicators.sma50Distance?.toFixed(1),
+                        sma200Dist: indicators.sma200Distance?.toFixed(1)
+                    };
+                }
+                return null;
+            } catch (err) {
+                return null;
+            }
+        };
+
+        // Process in batches to avoid overwhelming the API
+        for (let i = 0; i < uniqueStocks.length; i += batchSize) {
+            const batch = uniqueStocks.slice(i, i + batchSize);
+            const batchResults = await Promise.all(batch.map(scanStock));
+            results.push(...batchResults.filter(r => r !== null));
+        }
+
+        console.log(`[Technical Screener] Found ${results.length} matches for ${screenType}`);
+
+        res.writeHead(200, {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+        });
+        res.end(JSON.stringify({
+            type: screenType,
+            count: results.length,
+            stocks: results,
+            scannedAt: new Date().toISOString()
+        }));
+        return;
+    }
+
     // ===== PUSH NOTIFICATION ENDPOINTS =====
 
     // Register push token and alerts

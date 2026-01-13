@@ -173,6 +173,32 @@
             return results;
         };
 
+        // Technical indicator screener types
+        const TECHNICAL_SCREENERS = [
+            { id: 'rsi_oversold', name: 'RSI Oversold', emoji: '📉', desc: 'Stocks with RSI below 30 - potential bounce', type: 'bullish' },
+            { id: 'rsi_overbought', name: 'RSI Overbought', emoji: '📈', desc: 'Stocks with RSI above 70 - extended', type: 'bearish' },
+            { id: 'golden_cross', name: 'Golden Cross', emoji: '⚡', desc: '50 SMA crossed above 200 SMA - major bullish signal', type: 'bullish' },
+            { id: 'death_cross', name: 'Death Cross', emoji: '💀', desc: '50 SMA crossed below 200 SMA - major bearish signal', type: 'bearish' },
+            { id: 'near_sma_50', name: 'Near 50 SMA', emoji: '📏', desc: 'Price within 2% of 50-day moving average', type: 'neutral' },
+            { id: 'near_sma_200', name: 'Near 200 SMA', emoji: '📏', desc: 'Price within 2% of 200-day moving average', type: 'neutral' },
+            { id: 'above_sma_200', name: 'Above 200 SMA', emoji: '✅', desc: 'Trading above key support level', type: 'bullish' },
+            { id: 'below_sma_200', name: 'Below 200 SMA', emoji: '❌', desc: 'Trading below key support level', type: 'bearish' },
+        ];
+
+        // Fetch technical screener results from server
+        const fetchTechnicalScreener = async (screenType) => {
+            try {
+                console.log(`[Technical Screener] Fetching: ${screenType}`);
+                const response = await fetch(`/api/technical-screener?type=${screenType}`);
+                const data = await response.json();
+                console.log(`[Technical Screener] Got ${data.count} results`);
+                return data.stocks || [];
+            } catch (error) {
+                console.error('[Technical Screener] Error:', error);
+                return [];
+            }
+        };
+
         // Fetch insider trading data from OpenInsider
         const fetchInsiderTrading = async () => {
             try {
@@ -6335,6 +6361,9 @@
             const [patternStocks, setPatternStocks] = useState([]);
             const [patternLoading, setPatternLoading] = useState(false);
             const [patternCategory, setPatternCategory] = useState('all');
+            const [technicalScreenType, setTechnicalScreenType] = useState('rsi_oversold');
+            const [technicalStocks, setTechnicalStocks] = useState([]);
+            const [technicalLoading, setTechnicalLoading] = useState(false);
             const [chartStock, setChartStock] = useState(null); // Selected stock to show chart
             const [alerts, setAlerts] = useState([]);
             const [showAlerts, setShowAlerts] = useState(false);
@@ -7701,15 +7730,21 @@
                                 <div className="flex gap-2 mb-4">
                                     <button
                                         onClick={() => setScreenerTab('patterns')}
-                                        className={`flex-1 py-3 rounded-lg text-sm font-medium transition-colors ${screenerTab === 'patterns' ? 'bg-purple-600' : 'bg-gray-800 hover:bg-gray-700'}`}
+                                        className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${screenerTab === 'patterns' ? 'bg-purple-600' : 'bg-gray-800 hover:bg-gray-700'}`}
                                     >
-                                        📐 Chart Patterns
+                                        📐 Patterns
+                                    </button>
+                                    <button
+                                        onClick={() => setScreenerTab('technical')}
+                                        className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${screenerTab === 'technical' ? 'bg-purple-600' : 'bg-gray-800 hover:bg-gray-700'}`}
+                                    >
+                                        📊 Technical
                                     </button>
                                     <button
                                         onClick={() => setScreenerTab('insider')}
-                                        className={`flex-1 py-3 rounded-lg text-sm font-medium transition-colors ${screenerTab === 'insider' ? 'bg-purple-600' : 'bg-gray-800 hover:bg-gray-700'}`}
+                                        className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${screenerTab === 'insider' ? 'bg-purple-600' : 'bg-gray-800 hover:bg-gray-700'}`}
                                     >
-                                        🕵️ Insider Buys
+                                        🕵️ Insider
                                     </button>
                                 </div>
 
@@ -7922,6 +7957,104 @@
                                         <div className="mt-4 p-3 bg-gray-800 border border-gray-700 rounded-xl text-xs text-gray-400">
                                             <div className="font-semibold text-gray-300 mb-1">🎯 Quality Filters:</div>
                                             <div>Market Cap &gt;$300M • Avg Volume &gt;200K • Price &gt;$5</div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Technical Indicators Screener */}
+                                {screenerTab === 'technical' && (
+                                    <div>
+                                        <div className="flex items-center justify-between mb-2">
+                                            <h2 className="text-lg font-semibold">📊 Technical Screener</h2>
+                                            <span className="text-xs text-gray-500">100+ stocks scanned</span>
+                                        </div>
+
+                                        {/* Info Banner */}
+                                        <div className="mb-3 px-3 py-2 bg-blue-900/30 border border-blue-600/50 rounded-lg">
+                                            <div className="flex items-center gap-2 text-blue-400 text-xs">
+                                                <span>💡</span>
+                                                <span>Scans major stocks for RSI, Moving Averages, and Cross signals</span>
+                                            </div>
+                                        </div>
+
+                                        {/* Screener Type Selector */}
+                                        <div className="grid grid-cols-2 gap-2 mb-4">
+                                            {TECHNICAL_SCREENERS.map(screen => (
+                                                <button
+                                                    key={screen.id}
+                                                    onClick={async () => {
+                                                        setTechnicalScreenType(screen.id);
+                                                        setTechnicalLoading(true);
+                                                        const results = await fetchTechnicalScreener(screen.id);
+                                                        setTechnicalStocks(results);
+                                                        setTechnicalLoading(false);
+                                                    }}
+                                                    className={`p-3 rounded-xl text-left transition-all ${
+                                                        technicalScreenType === screen.id
+                                                            ? screen.type === 'bullish' ? 'bg-green-600/30 border-2 border-green-500'
+                                                            : screen.type === 'bearish' ? 'bg-red-600/30 border-2 border-red-500'
+                                                            : 'bg-purple-600/30 border-2 border-purple-500'
+                                                            : 'bg-gray-800 hover:bg-gray-700 border-2 border-transparent'
+                                                    }`}
+                                                >
+                                                    <div className="flex items-center gap-2 font-medium text-sm">
+                                                        <span>{screen.emoji}</span>
+                                                        <span>{screen.name}</span>
+                                                    </div>
+                                                    <div className="text-xs text-gray-400 mt-1">{screen.desc}</div>
+                                                </button>
+                                            ))}
+                                        </div>
+
+                                        {/* Results */}
+                                        <div className="space-y-2">
+                                            {technicalLoading ? (
+                                                <div className="text-center py-8">
+                                                    <div className="text-4xl mb-2 animate-pulse">📊</div>
+                                                    <div className="text-gray-400">Scanning stocks...</div>
+                                                    <div className="text-xs text-gray-500 mt-1">This may take 10-20 seconds</div>
+                                                </div>
+                                            ) : technicalStocks.length === 0 ? (
+                                                <div className="text-center py-8 text-gray-500">
+                                                    <p className="text-2xl mb-2">👆</p>
+                                                    <p>Select a screener above to scan</p>
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    <div className="text-sm text-gray-400 mb-2">
+                                                        Found {technicalStocks.length} stocks matching "{TECHNICAL_SCREENERS.find(s => s.id === technicalScreenType)?.name}"
+                                                    </div>
+                                                    {technicalStocks.map((stock, i) => (
+                                                        <div
+                                                            key={stock.ticker}
+                                                            onClick={() => setChartStock({ ticker: stock.ticker, name: stock.ticker })}
+                                                            className="p-3 bg-gray-800 rounded-xl hover:bg-gray-700 cursor-pointer transition-colors"
+                                                        >
+                                                            <div className="flex justify-between items-center">
+                                                                <div>
+                                                                    <div className="font-bold text-lg">{stock.ticker}</div>
+                                                                    <div className="text-sm text-gray-400">{stock.signal}</div>
+                                                                </div>
+                                                                <div className="text-right">
+                                                                    <div className="font-semibold">${stock.price}</div>
+                                                                    <div className={`text-sm ${
+                                                                        TECHNICAL_SCREENERS.find(s => s.id === technicalScreenType)?.type === 'bullish' ? 'text-green-400'
+                                                                        : TECHNICAL_SCREENERS.find(s => s.id === technicalScreenType)?.type === 'bearish' ? 'text-red-400'
+                                                                        : 'text-yellow-400'
+                                                                    }`}>
+                                                                        {stock.value}
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                            {stock.rsi && (
+                                                                <div className="mt-2 text-xs text-gray-500">
+                                                                    RSI: {stock.rsi} | 50 SMA: {stock.sma50Dist}% | 200 SMA: {stock.sma200Dist}%
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    ))}
+                                                </>
+                                            )}
                                         </div>
                                     </div>
                                 )}
