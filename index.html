@@ -5155,6 +5155,10 @@
             PERCENT_LOSS: 'percent_loss',
             RSI_ABOVE: 'rsi_above',
             RSI_BELOW: 'rsi_below',
+            SMA_50: 'sma_50',                      // Price near 50 SMA
+            SMA_200: 'sma_200',                    // Price near 200 SMA
+            GOLDEN_CROSS: 'golden_cross',          // 50 SMA crosses above 200 SMA
+            DEATH_CROSS: 'death_cross',            // 50 SMA crosses below 200 SMA
             NEWS: 'news',
             VOLUME_SPIKE: 'volume_spike',
             TRAILING_STOP: 'trailing_stop',
@@ -5410,6 +5414,10 @@
                     [ALERT_TYPES.PERCENT_LOSS]: '📉 % Loss',
                     [ALERT_TYPES.RSI_ABOVE]: '📊 RSI Above',
                     [ALERT_TYPES.RSI_BELOW]: '📊 RSI Below',
+                    [ALERT_TYPES.SMA_50]: '📏 Near 50 SMA',
+                    [ALERT_TYPES.SMA_200]: '📏 Near 200 SMA',
+                    [ALERT_TYPES.GOLDEN_CROSS]: '⚡ Golden Cross',
+                    [ALERT_TYPES.DEATH_CROSS]: '💀 Death Cross',
                     [ALERT_TYPES.VOLUME_SPIKE]: '🔊 Volume Spike',
                     [ALERT_TYPES.TRAILING_STOP]: '🛑 Trailing Stop %',
                     [ALERT_TYPES.PRICE_VELOCITY]: '⚡ Price Velocity',
@@ -5585,6 +5593,10 @@
                                                 <option value={ALERT_TYPES.TRAILING_STOP}>🛑 Trailing Stop %</option>
                                                 <option value={ALERT_TYPES.RSI_ABOVE}>📊 RSI Overbought (Above)</option>
                                                 <option value={ALERT_TYPES.RSI_BELOW}>📊 RSI Oversold (Below)</option>
+                                                <option value={ALERT_TYPES.SMA_50}>📏 Price Near 50 SMA (%)</option>
+                                                <option value={ALERT_TYPES.SMA_200}>📏 Price Near 200 SMA (%)</option>
+                                                <option value={ALERT_TYPES.GOLDEN_CROSS}>⚡ Golden Cross (50/200 SMA)</option>
+                                                <option value={ALERT_TYPES.DEATH_CROSS}>💀 Death Cross (50/200 SMA)</option>
                                                 <option value={ALERT_TYPES.PRICE_VELOCITY}>⚡ Price Velocity (% in 5min)</option>
                                                 <option value={ALERT_TYPES.VOLUME_SPIKE}>🔊 Volume Spike (X% above avg)</option>
                                                 <option value={ALERT_TYPES.GAP_UP}>🌅 Pre-Market Gap Up %</option>
@@ -5602,15 +5614,26 @@
                                                     ? 'Percentage %'
                                                     : newAlert.type.includes('rsi')
                                                         ? 'RSI Value (0-100)'
-                                                        : 'Target Price $'
+                                                        : newAlert.type.includes('sma')
+                                                            ? 'Distance from SMA (%)'
+                                                            : newAlert.type.includes('cross')
+                                                                ? 'Not needed (auto)'
+                                                                : 'Target Price $'
                                                 }
                                             </label>
                                             <input
                                                 type="number"
                                                 value={newAlert.value}
                                                 onChange={(e) => setNewAlert({ ...newAlert, value: e.target.value })}
-                                                placeholder={newAlert.type.includes('rsi') ? '70' : newAlert.type.includes('percent') ? '10' : '100.00'}
-                                                className="w-full p-3 bg-gray-800 border border-gray-700 rounded-xl text-white focus:border-blue-500 focus:outline-none"
+                                                placeholder={
+                                                    newAlert.type.includes('rsi') ? '70'
+                                                    : newAlert.type.includes('percent') ? '10'
+                                                    : newAlert.type.includes('sma') ? '2'
+                                                    : newAlert.type.includes('cross') ? '0'
+                                                    : '100.00'
+                                                }
+                                                disabled={newAlert.type.includes('cross')}
+                                                className="w-full p-3 bg-gray-800 border border-gray-700 rounded-xl text-white focus:border-blue-500 focus:outline-none disabled:opacity-50"
                                             />
                                         </div>
                                         <div>
@@ -5701,6 +5724,30 @@
                                             >
                                                 🛑 Trailing Stop (5%)
                                             </button>
+                                            <button
+                                                onClick={() => setNewAlert({ ...newAlert, type: ALERT_TYPES.SMA_50, value: '2' })}
+                                                className="p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-xs text-left"
+                                            >
+                                                📏 Near 50 SMA (2%)
+                                            </button>
+                                            <button
+                                                onClick={() => setNewAlert({ ...newAlert, type: ALERT_TYPES.SMA_200, value: '2' })}
+                                                className="p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-xs text-left"
+                                            >
+                                                📏 Near 200 SMA (2%)
+                                            </button>
+                                            <button
+                                                onClick={() => setNewAlert({ ...newAlert, type: ALERT_TYPES.GOLDEN_CROSS, value: '0' })}
+                                                className="p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-xs text-left"
+                                            >
+                                                ⚡ Golden Cross Alert
+                                            </button>
+                                            <button
+                                                onClick={() => setNewAlert({ ...newAlert, type: ALERT_TYPES.DEATH_CROSS, value: '0' })}
+                                                className="p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-xs text-left"
+                                            >
+                                                💀 Death Cross Alert
+                                            </button>
                                         </div>
                                     </div>
                                 </div>
@@ -5725,7 +5772,13 @@
                                                     <div>
                                                         <div className="font-bold text-lg">{alert.ticker}</div>
                                                         <div className="text-sm">
-                                                            {getAlertTypeLabel(alert.type)}: {alert.type.includes('percent') || alert.type === ALERT_TYPES.TRAILING_STOP ? `${alert.value}%` : alert.type.includes('rsi') ? alert.value : `$${alert.value}`}
+                                                            {getAlertTypeLabel(alert.type)}: {
+                                                                alert.type.includes('percent') || alert.type === ALERT_TYPES.TRAILING_STOP ? `${alert.value}%`
+                                                                : alert.type.includes('rsi') ? alert.value
+                                                                : alert.type.includes('sma') ? `within ${alert.value}%`
+                                                                : alert.type.includes('cross') ? 'Auto-detect'
+                                                                : `$${alert.value}`
+                                                            }
                                                         </div>
                                                         {alert.note && <div className="text-xs text-gray-400 mt-1">📝 {alert.note}</div>}
                                                         <div className="text-xs text-gray-500 mt-1">

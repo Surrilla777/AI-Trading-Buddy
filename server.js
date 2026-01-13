@@ -14,11 +14,24 @@ let firebaseMessaging = null;
 // Initialize Firebase Admin if credentials are available
 const initFirebaseAdmin = () => {
     try {
-        // Check for service account credentials (set as env var in Railway)
-        if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-            const admin = require('firebase-admin');
-            const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+        const admin = require('firebase-admin');
+        let serviceAccount = null;
 
+        // Try environment variable first (for Railway deployment)
+        if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+            serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+            console.log('[Firebase Admin] Using credentials from environment variable');
+        }
+        // Fall back to local file (for local development)
+        else {
+            const serviceAccountPath = path.join(__dirname, 'firebase-service-account.json');
+            if (fs.existsSync(serviceAccountPath)) {
+                serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
+                console.log('[Firebase Admin] Using credentials from local file');
+            }
+        }
+
+        if (serviceAccount) {
             admin.initializeApp({
                 credential: admin.credential.cert(serviceAccount)
             });
@@ -29,7 +42,7 @@ const initFirebaseAdmin = () => {
             return true;
         } else {
             console.log('[Firebase Admin] No service account found - push sending disabled');
-            console.log('[Firebase Admin] Set FIREBASE_SERVICE_ACCOUNT env var to enable');
+            console.log('[Firebase Admin] Add firebase-service-account.json or set FIREBASE_SERVICE_ACCOUNT env var');
             return false;
         }
     } catch (err) {
@@ -678,10 +691,141 @@ const fetchStockPrice = (ticker) => {
     });
 };
 
+// Cache for technical indicators (longer TTL since they don't change as fast)
+const technicalCache = {};
+const TECHNICAL_CACHE_TTL = 60000; // 1 minute
+
+// Fetch historical data for technical analysis
+const fetchHistoricalData = (ticker, days = 200) => {
+    return new Promise((resolve) => {
+        const cacheKey = `${ticker}_history`;
+        const cached = technicalCache[cacheKey];
+        if (cached && (Date.now() - cached.timestamp) < TECHNICAL_CACHE_TTL) {
+            resolve(cached.data);
+            return;
+        }
+
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1y`;
+
+        https.get(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+        }, (response) => {
+            let data = '';
+            response.on('data', chunk => data += chunk);
+            response.on('end', () => {
+                try {
+                    const json = JSON.parse(data);
+                    const result = json.chart?.result?.[0];
+                    if (result?.indicators?.quote?.[0]?.close) {
+                        const closes = result.indicators.quote[0].close.filter(p => p != null);
+                        technicalCache[cacheKey] = { data: closes, timestamp: Date.now() };
+                        resolve(closes);
+                    } else {
+                        resolve(null);
+                    }
+                } catch (e) {
+                    resolve(null);
+                }
+            });
+        }).on('error', () => resolve(null));
+    });
+};
+
+// Calculate RSI (Relative Strength Index)
+const calculateRSI = (prices, period = 14) => {
+    if (!prices || prices.length < period + 1) return null;
+
+    let gains = 0;
+    let losses = 0;
+
+    // Calculate initial average gain/loss
+    for (let i = 1; i <= period; i++) {
+        const change = prices[i] - prices[i - 1];
+        if (change > 0) gains += change;
+        else losses += Math.abs(change);
+    }
+
+    let avgGain = gains / period;
+    let avgLoss = losses / period;
+
+    // Calculate smoothed RSI for remaining prices
+    for (let i = period + 1; i < prices.length; i++) {
+        const change = prices[i] - prices[i - 1];
+        const gain = change > 0 ? change : 0;
+        const loss = change < 0 ? Math.abs(change) : 0;
+
+        avgGain = (avgGain * (period - 1) + gain) / period;
+        avgLoss = (avgLoss * (period - 1) + loss) / period;
+    }
+
+    if (avgLoss === 0) return 100;
+    const rs = avgGain / avgLoss;
+    return 100 - (100 / (1 + rs));
+};
+
+// Calculate Simple Moving Average
+const calculateSMA = (prices, period) => {
+    if (!prices || prices.length < period) return null;
+    const slice = prices.slice(-period);
+    return slice.reduce((sum, p) => sum + p, 0) / period;
+};
+
+// Get all technical indicators for a ticker
+const getTechnicalIndicators = async (ticker) => {
+    const cacheKey = `${ticker}_indicators`;
+    const cached = technicalCache[cacheKey];
+    if (cached && (Date.now() - cached.timestamp) < TECHNICAL_CACHE_TTL) {
+        return cached.data;
+    }
+
+    const prices = await fetchHistoricalData(ticker);
+    if (!prices || prices.length < 200) {
+        console.log(`[Technical] Not enough data for ${ticker}: ${prices?.length || 0} days`);
+        return null;
+    }
+
+    const currentPrice = prices[prices.length - 1];
+    const rsi = calculateRSI(prices);
+    const sma50 = calculateSMA(prices, 50);
+    const sma200 = calculateSMA(prices, 200);
+
+    // Calculate previous SMAs for crossover detection
+    const prevPrices = prices.slice(0, -1);
+    const prevSma50 = calculateSMA(prevPrices, 50);
+    const prevSma200 = calculateSMA(prevPrices, 200);
+
+    // Detect Golden Cross (50 crosses above 200) or Death Cross (50 crosses below 200)
+    let crossType = null;
+    if (prevSma50 && prevSma200 && sma50 && sma200) {
+        if (prevSma50 <= prevSma200 && sma50 > sma200) {
+            crossType = 'golden';
+        } else if (prevSma50 >= prevSma200 && sma50 < sma200) {
+            crossType = 'death';
+        }
+    }
+
+    const indicators = {
+        price: currentPrice,
+        rsi: rsi ? Math.round(rsi * 100) / 100 : null,
+        sma50,
+        sma200,
+        sma50Distance: sma50 ? ((currentPrice - sma50) / sma50 * 100) : null,
+        sma200Distance: sma200 ? ((currentPrice - sma200) / sma200 * 100) : null,
+        crossType
+    };
+
+    technicalCache[cacheKey] = { data: indicators, timestamp: Date.now() };
+    console.log(`[Technical] ${ticker}: RSI=${indicators.rsi}, SMA50 dist=${indicators.sma50Distance?.toFixed(1)}%, SMA200 dist=${indicators.sma200Distance?.toFixed(1)}%`);
+
+    return indicators;
+};
+
 // Track which alerts have been triggered (to prevent spam)
 const triggeredAlertCache = {};
 
-// Check a single alert against current price
+// Check a single alert against current price or technical indicator
 const checkAlert = async (alert, subscription) => {
     const { ticker, type, value } = alert;
     const alertKey = `${subscription.token}-${alert.id}`;
@@ -691,44 +835,103 @@ const checkAlert = async (alert, subscription) => {
         return;
     }
 
-    const price = await fetchStockPrice(ticker);
-    if (!price) return;
-
     let shouldTrigger = false;
     let title = '';
     let body = '';
+    let notificationData = { type, ticker, alertId: alert.id.toString() };
 
-    switch (type) {
-        case 'price_above':
-            if (price >= value) {
-                shouldTrigger = true;
-                title = `${ticker} Hit Target!`;
-                body = `Price: $${price.toFixed(2)} (above $${value})`;
-            }
-            break;
-        case 'price_below':
-            if (price <= value) {
-                shouldTrigger = true;
-                title = `${ticker} Alert!`;
-                body = `Price: $${price.toFixed(2)} (below $${value})`;
-            }
-            break;
-        case 'percent_gain':
-            // Need previous close for this - skip for now in server monitoring
-            break;
-        case 'percent_loss':
-            // Need previous close for this - skip for now in server monitoring
-            break;
+    // Technical indicator alerts
+    const technicalTypes = ['rsi_above', 'rsi_below', 'sma_50', 'sma_200', 'golden_cross', 'death_cross'];
+
+    if (technicalTypes.includes(type)) {
+        const indicators = await getTechnicalIndicators(ticker);
+        if (!indicators) return;
+
+        switch (type) {
+            case 'rsi_above':
+                if (indicators.rsi && indicators.rsi >= value) {
+                    shouldTrigger = true;
+                    title = `📈 ${ticker} RSI Overbought!`;
+                    body = `RSI: ${indicators.rsi.toFixed(1)} (above ${value}) - Consider taking profits`;
+                    notificationData.rsi = indicators.rsi.toString();
+                }
+                break;
+            case 'rsi_below':
+                if (indicators.rsi && indicators.rsi <= value) {
+                    shouldTrigger = true;
+                    title = `📉 ${ticker} RSI Oversold!`;
+                    body = `RSI: ${indicators.rsi.toFixed(1)} (below ${value}) - Potential buying opportunity`;
+                    notificationData.rsi = indicators.rsi.toString();
+                }
+                break;
+            case 'sma_50':
+                // value = percentage distance threshold (e.g., 2 means within 2%)
+                if (indicators.sma50Distance !== null && Math.abs(indicators.sma50Distance) <= value) {
+                    shouldTrigger = true;
+                    const aboveBelow = indicators.sma50Distance >= 0 ? 'above' : 'below';
+                    title = `📊 ${ticker} Near 50 SMA!`;
+                    body = `Price $${indicators.price.toFixed(2)} is ${Math.abs(indicators.sma50Distance).toFixed(1)}% ${aboveBelow} 50 SMA ($${indicators.sma50.toFixed(2)})`;
+                    notificationData.price = indicators.price.toString();
+                }
+                break;
+            case 'sma_200':
+                // value = percentage distance threshold (e.g., 2 means within 2%)
+                if (indicators.sma200Distance !== null && Math.abs(indicators.sma200Distance) <= value) {
+                    shouldTrigger = true;
+                    const aboveBelow = indicators.sma200Distance >= 0 ? 'above' : 'below';
+                    title = `📊 ${ticker} Near 200 SMA!`;
+                    body = `Price $${indicators.price.toFixed(2)} is ${Math.abs(indicators.sma200Distance).toFixed(1)}% ${aboveBelow} 200 SMA ($${indicators.sma200.toFixed(2)})`;
+                    notificationData.price = indicators.price.toString();
+                }
+                break;
+            case 'golden_cross':
+                if (indicators.crossType === 'golden') {
+                    shouldTrigger = true;
+                    title = `⚡ ${ticker} GOLDEN CROSS!`;
+                    body = `50 SMA crossed ABOVE 200 SMA - Major bullish signal!`;
+                }
+                break;
+            case 'death_cross':
+                if (indicators.crossType === 'death') {
+                    shouldTrigger = true;
+                    title = `💀 ${ticker} DEATH CROSS!`;
+                    body = `50 SMA crossed BELOW 200 SMA - Major bearish signal!`;
+                }
+                break;
+        }
+    } else {
+        // Price-based alerts
+        const price = await fetchStockPrice(ticker);
+        if (!price) return;
+        notificationData.price = price.toString();
+
+        switch (type) {
+            case 'price_above':
+                if (price >= value) {
+                    shouldTrigger = true;
+                    title = `🎯 ${ticker} Hit Target!`;
+                    body = `Price: $${price.toFixed(2)} (above $${value})`;
+                }
+                break;
+            case 'price_below':
+                if (price <= value) {
+                    shouldTrigger = true;
+                    title = `⚠️ ${ticker} Alert!`;
+                    body = `Price: $${price.toFixed(2)} (below $${value})`;
+                }
+                break;
+            case 'percent_gain':
+                // Need previous close for this - skip for now in server monitoring
+                break;
+            case 'percent_loss':
+                // Need previous close for this - skip for now in server monitoring
+                break;
+        }
     }
 
     if (shouldTrigger) {
         console.log(`[Alert Monitor] Triggering alert: ${title}`);
-        const sent = await sendPushNotification(subscription.token, title, body, {
-            type,
-            ticker,
-            alertId: alert.id.toString(),
-            price: price.toString()
-        });
+        const sent = await sendPushNotification(subscription.token, title, body, notificationData);
 
         if (sent) {
             triggeredAlertCache[alertKey] = Date.now();
