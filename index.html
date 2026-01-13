@@ -1091,6 +1091,333 @@
             localStorage.setItem('dailyGoal', goal.toString());
         };
 
+        // ===== TRADE JOURNAL - TradeZella Style =====
+        // Complete trade logging, analytics, and performance tracking
+
+        const SETUP_TYPES = [
+            { id: 'breakout', label: 'Breakout', emoji: '🚀' },
+            { id: 'breakdown', label: 'Breakdown', emoji: '📉' },
+            { id: 'reversal', label: 'Reversal', emoji: '🔄' },
+            { id: 'momentum', label: 'Momentum', emoji: '⚡' },
+            { id: 'scalp', label: 'Scalp', emoji: '🎯' },
+            { id: 'swing', label: 'Swing', emoji: '🌊' },
+            { id: 'earnings', label: 'Earnings Play', emoji: '📊' },
+            { id: 'news', label: 'News Catalyst', emoji: '📰' },
+            { id: 'gap', label: 'Gap Fill', emoji: '⬆️' },
+            { id: 'support', label: 'Support Bounce', emoji: '🛡️' },
+            { id: 'resistance', label: 'Resistance Break', emoji: '💥' },
+            { id: 'vwap', label: 'VWAP Play', emoji: '📈' },
+            { id: 'options_flow', label: 'Options Flow', emoji: '🌊' },
+            { id: 'squeeze', label: 'Short Squeeze', emoji: '🍋' },
+            { id: 'other', label: 'Other', emoji: '📝' }
+        ];
+
+        const MISTAKE_TYPES = [
+            { id: 'fomo', label: 'FOMO Entry', emoji: '😰' },
+            { id: 'no_stop', label: 'No Stop Loss', emoji: '🛑' },
+            { id: 'moved_stop', label: 'Moved Stop', emoji: '🔄' },
+            { id: 'oversized', label: 'Oversized Position', emoji: '🐋' },
+            { id: 'revenge', label: 'Revenge Trade', emoji: '😤' },
+            { id: 'early_exit', label: 'Early Exit', emoji: '🏃' },
+            { id: 'late_exit', label: 'Late Exit', emoji: '🐢' },
+            { id: 'chasing', label: 'Chasing', emoji: '🏃‍♂️' },
+            { id: 'no_plan', label: 'No Trade Plan', emoji: '❓' },
+            { id: 'overtrading', label: 'Overtrading', emoji: '🔥' },
+            { id: 'ignored_rules', label: 'Ignored Rules', emoji: '⚠️' },
+            { id: 'emotional', label: 'Emotional Decision', emoji: '😢' },
+            { id: 'none', label: 'No Mistakes', emoji: '✅' }
+        ];
+
+        const EMOTIONS = [
+            { id: 'confident', label: 'Confident', emoji: '😎', color: 'text-green-400' },
+            { id: 'neutral', label: 'Neutral', emoji: '😐', color: 'text-gray-400' },
+            { id: 'anxious', label: 'Anxious', emoji: '😰', color: 'text-yellow-400' },
+            { id: 'fearful', label: 'Fearful', emoji: '😨', color: 'text-orange-400' },
+            { id: 'greedy', label: 'Greedy', emoji: '🤑', color: 'text-yellow-400' },
+            { id: 'frustrated', label: 'Frustrated', emoji: '😤', color: 'text-red-400' },
+            { id: 'revenge', label: 'Revenge Mode', emoji: '👊', color: 'text-red-500' },
+            { id: 'fomo', label: 'FOMO', emoji: '😱', color: 'text-purple-400' },
+            { id: 'excited', label: 'Excited', emoji: '🤩', color: 'text-blue-400' },
+            { id: 'bored', label: 'Bored', emoji: '😴', color: 'text-gray-500' }
+        ];
+
+        // Load journal entries from localStorage
+        const loadJournalEntries = () => {
+            try {
+                const saved = localStorage.getItem('tradeJournal');
+                return saved ? JSON.parse(saved) : [];
+            } catch (e) {
+                return [];
+            }
+        };
+
+        // Save journal entries
+        const saveJournalEntries = (entries) => {
+            localStorage.setItem('tradeJournal', JSON.stringify(entries));
+        };
+
+        // Calculate journal statistics
+        const calculateJournalStats = (entries) => {
+            if (!entries || entries.length === 0) {
+                return {
+                    totalTrades: 0,
+                    wins: 0,
+                    losses: 0,
+                    breakeven: 0,
+                    winRate: 0,
+                    totalPnL: 0,
+                    avgWin: 0,
+                    avgLoss: 0,
+                    profitFactor: 0,
+                    largestWin: 0,
+                    largestLoss: 0,
+                    avgRMultiple: 0,
+                    currentStreak: 0,
+                    streakType: null,
+                    bestDay: null,
+                    worstDay: null,
+                    avgTradesPerDay: 0,
+                    totalFees: 0,
+                    netPnL: 0,
+                    expectancy: 0,
+                    setupStats: {},
+                    mistakeStats: {},
+                    emotionStats: {},
+                    dayOfWeekStats: {},
+                    hourStats: {}
+                };
+            }
+
+            const wins = entries.filter(e => e.pnl > 0);
+            const losses = entries.filter(e => e.pnl < 0);
+            const breakeven = entries.filter(e => e.pnl === 0);
+
+            const totalWins = wins.reduce((sum, e) => sum + e.pnl, 0);
+            const totalLosses = Math.abs(losses.reduce((sum, e) => sum + e.pnl, 0));
+            const totalPnL = entries.reduce((sum, e) => sum + e.pnl, 0);
+            const totalFees = entries.reduce((sum, e) => sum + (e.fees || 0), 0);
+
+            // Calculate streaks
+            let currentStreak = 0;
+            let streakType = null;
+            const sortedEntries = [...entries].sort((a, b) => new Date(b.exitDate) - new Date(a.exitDate));
+            for (const entry of sortedEntries) {
+                const isWin = entry.pnl > 0;
+                if (currentStreak === 0) {
+                    streakType = isWin ? 'win' : 'loss';
+                    currentStreak = 1;
+                } else if ((isWin && streakType === 'win') || (!isWin && streakType === 'loss')) {
+                    currentStreak++;
+                } else {
+                    break;
+                }
+            }
+
+            // Group by day for best/worst day
+            const dayPnL = {};
+            entries.forEach(e => {
+                const day = e.exitDate?.split('T')[0] || e.entryDate?.split('T')[0];
+                if (day) {
+                    dayPnL[day] = (dayPnL[day] || 0) + e.pnl;
+                }
+            });
+            const days = Object.entries(dayPnL);
+            const bestDay = days.length > 0 ? days.reduce((a, b) => b[1] > a[1] ? b : a) : null;
+            const worstDay = days.length > 0 ? days.reduce((a, b) => b[1] < a[1] ? b : a) : null;
+
+            // Setup performance
+            const setupStats = {};
+            entries.forEach(e => {
+                if (e.setup) {
+                    if (!setupStats[e.setup]) {
+                        setupStats[e.setup] = { trades: 0, wins: 0, pnl: 0 };
+                    }
+                    setupStats[e.setup].trades++;
+                    if (e.pnl > 0) setupStats[e.setup].wins++;
+                    setupStats[e.setup].pnl += e.pnl;
+                }
+            });
+
+            // Mistake tracking
+            const mistakeStats = {};
+            entries.forEach(e => {
+                (e.mistakes || []).forEach(m => {
+                    if (!mistakeStats[m]) {
+                        mistakeStats[m] = { count: 0, totalLoss: 0 };
+                    }
+                    mistakeStats[m].count++;
+                    if (e.pnl < 0) mistakeStats[m].totalLoss += Math.abs(e.pnl);
+                });
+            });
+
+            // Emotion correlation
+            const emotionStats = {};
+            entries.forEach(e => {
+                if (e.emotionBefore) {
+                    if (!emotionStats[e.emotionBefore]) {
+                        emotionStats[e.emotionBefore] = { trades: 0, wins: 0, pnl: 0 };
+                    }
+                    emotionStats[e.emotionBefore].trades++;
+                    if (e.pnl > 0) emotionStats[e.emotionBefore].wins++;
+                    emotionStats[e.emotionBefore].pnl += e.pnl;
+                }
+            });
+
+            // Day of week performance
+            const dayOfWeekStats = { 0: { pnl: 0, trades: 0 }, 1: { pnl: 0, trades: 0 }, 2: { pnl: 0, trades: 0 }, 3: { pnl: 0, trades: 0 }, 4: { pnl: 0, trades: 0 }, 5: { pnl: 0, trades: 0 }, 6: { pnl: 0, trades: 0 } };
+            entries.forEach(e => {
+                const day = new Date(e.entryDate).getDay();
+                dayOfWeekStats[day].trades++;
+                dayOfWeekStats[day].pnl += e.pnl;
+            });
+
+            // Hour performance
+            const hourStats = {};
+            entries.forEach(e => {
+                const hour = new Date(e.entryDate).getHours();
+                if (!hourStats[hour]) hourStats[hour] = { trades: 0, pnl: 0, wins: 0 };
+                hourStats[hour].trades++;
+                hourStats[hour].pnl += e.pnl;
+                if (e.pnl > 0) hourStats[hour].wins++;
+            });
+
+            const avgWin = wins.length > 0 ? totalWins / wins.length : 0;
+            const avgLoss = losses.length > 0 ? totalLosses / losses.length : 0;
+            const winRate = entries.length > 0 ? (wins.length / entries.length) * 100 : 0;
+            const profitFactor = totalLosses > 0 ? totalWins / totalLosses : totalWins > 0 ? Infinity : 0;
+            const expectancy = entries.length > 0 ? totalPnL / entries.length : 0;
+
+            // R-Multiple calculations
+            const rMultiples = entries.filter(e => e.riskAmount && e.riskAmount > 0).map(e => e.pnl / e.riskAmount);
+            const avgRMultiple = rMultiples.length > 0 ? rMultiples.reduce((a, b) => a + b, 0) / rMultiples.length : 0;
+
+            return {
+                totalTrades: entries.length,
+                wins: wins.length,
+                losses: losses.length,
+                breakeven: breakeven.length,
+                winRate,
+                totalPnL,
+                avgWin,
+                avgLoss,
+                profitFactor,
+                largestWin: wins.length > 0 ? Math.max(...wins.map(e => e.pnl)) : 0,
+                largestLoss: losses.length > 0 ? Math.min(...losses.map(e => e.pnl)) : 0,
+                avgRMultiple,
+                currentStreak,
+                streakType,
+                bestDay,
+                worstDay,
+                avgTradesPerDay: days.length > 0 ? entries.length / days.length : 0,
+                totalFees,
+                netPnL: totalPnL - totalFees,
+                expectancy,
+                setupStats,
+                mistakeStats,
+                emotionStats,
+                dayOfWeekStats,
+                hourStats
+            };
+        };
+
+        // Grade a trade (A+ to F)
+        const gradeJournalTrade = (trade) => {
+            let score = 50; // Start at C
+            const reasons = [];
+
+            // Win/Loss impact (+/- 20 points)
+            if (trade.pnl > 0) {
+                score += 15;
+                reasons.push('Winner');
+            } else if (trade.pnl < 0) {
+                score -= 10;
+                reasons.push('Loser');
+            }
+
+            // R-Multiple bonus (up to +20)
+            if (trade.riskAmount && trade.riskAmount > 0) {
+                const rMultiple = trade.pnl / trade.riskAmount;
+                if (rMultiple >= 3) { score += 20; reasons.push('3R+ trade!'); }
+                else if (rMultiple >= 2) { score += 15; reasons.push('2R+ trade'); }
+                else if (rMultiple >= 1) { score += 10; reasons.push('1R+ trade'); }
+                else if (rMultiple <= -1) { score -= 10; reasons.push('Full stop hit'); }
+            }
+
+            // Plan followed (+15)
+            if (trade.followedPlan) {
+                score += 15;
+                reasons.push('Followed plan');
+            } else {
+                score -= 10;
+                reasons.push('Deviated from plan');
+            }
+
+            // Mistakes (-5 each)
+            const mistakes = trade.mistakes || [];
+            if (mistakes.length > 0 && !mistakes.includes('none')) {
+                score -= mistakes.length * 5;
+                reasons.push(`${mistakes.length} mistake(s)`);
+            } else if (mistakes.includes('none')) {
+                score += 10;
+                reasons.push('Clean execution');
+            }
+
+            // Emotional state impact
+            const badEmotions = ['revenge', 'fomo', 'frustrated', 'greedy'];
+            if (badEmotions.includes(trade.emotionBefore)) {
+                score -= 10;
+                reasons.push('Traded with bad mindset');
+            }
+            if (trade.emotionBefore === 'confident' || trade.emotionBefore === 'neutral') {
+                score += 5;
+                reasons.push('Good mental state');
+            }
+
+            // Notes bonus
+            if (trade.notes && trade.notes.length > 50) {
+                score += 5;
+                reasons.push('Detailed notes');
+            }
+
+            // Clamp and convert to letter grade
+            score = Math.max(0, Math.min(100, score));
+            let grade, color;
+            if (score >= 90) { grade = 'A+'; color = 'text-green-400'; }
+            else if (score >= 80) { grade = 'A'; color = 'text-green-400'; }
+            else if (score >= 70) { grade = 'B'; color = 'text-blue-400'; }
+            else if (score >= 60) { grade = 'C'; color = 'text-yellow-400'; }
+            else if (score >= 50) { grade = 'D'; color = 'text-orange-400'; }
+            else { grade = 'F'; color = 'text-red-400'; }
+
+            return { grade, score, color, reasons };
+        };
+
+        // Get Voice of Logic review for a trade
+        const getTradeReview = (trade, personality = 'homie') => {
+            const isWin = trade.pnl > 0;
+            const pnlAbs = Math.abs(trade.pnl);
+            const rMultiple = trade.riskAmount ? (trade.pnl / trade.riskAmount).toFixed(1) : null;
+            const grade = gradeJournalTrade(trade);
+            const mistakes = trade.mistakes || [];
+            const hasMistakes = mistakes.length > 0 && !mistakes.includes('none');
+
+            if (personality === 'homie') {
+                if (isWin && grade.grade.includes('A')) {
+                    return `Yoooo this trade was CLEAN! 🔥 ${pnlAbs > 500 ? 'Big bag secured.' : 'Nice little W.'} ${rMultiple ? `${rMultiple}R - ` : ''}${trade.followedPlan ? 'Followed your plan, stuck to the rules.' : ''} This is how you build consistency. Keep this energy!`;
+                } else if (isWin && hasMistakes) {
+                    return `W is a W, but let's be real - you got lucky on this one. 😅 ${mistakes.map(m => MISTAKE_TYPES.find(mt => mt.id === m)?.label).join(', ')} could've cost you. The market bailed you out. Don't let this become a habit!`;
+                } else if (isWin) {
+                    return `Solid trade! +$${pnlAbs.toFixed(2)} in the pocket. ${trade.notes ? 'Good notes too - ' : ''}keep building that journal. Every documented W teaches you something.`;
+                } else if (!isWin && grade.grade === 'F') {
+                    return `Rough one. 😤 $${pnlAbs.toFixed(2)} gone. ${hasMistakes ? `Mistakes: ${mistakes.map(m => MISTAKE_TYPES.find(mt => mt.id === m)?.label).join(', ')}. ` : ''}${!trade.followedPlan ? "You didn't follow your plan - that's the real L here. " : ''}Learn from it, don't repeat it. Tomorrow's a new day.`;
+                } else if (!isWin) {
+                    return `Loss, but that's part of the game. -$${pnlAbs.toFixed(2)}. ${trade.followedPlan ? 'At least you followed your rules - sometimes good trades lose. ' : 'Next time, stick to the plan. '}${rMultiple && parseFloat(rMultiple) >= -1 ? 'Kept the loss small - risk management on point.' : 'Review your stop placement.'}`;
+                }
+            }
+
+            return `Trade logged. ${isWin ? 'Winner' : 'Loser'}. Grade: ${grade.grade}.`;
+        };
+
         // Get streak display
         const getStreakDisplay = (streak, streakType) => {
             if (streak === 0) return { emoji: '➖', text: 'No streak', color: 'text-gray-400' };
@@ -5658,6 +5985,197 @@
             );
         };
 
+        // Calendar View Component for Trade Journal
+        const CalendarView = ({ entries, onDayClick, dayOfWeekStats }) => {
+            const [currentDate, setCurrentDate] = useState(new Date());
+            const [selectedDay, setSelectedDay] = useState(null);
+
+            // Get first day of month and total days
+            const year = currentDate.getFullYear();
+            const month = currentDate.getMonth();
+            const firstDay = new Date(year, month, 1).getDay();
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const monthName = currentDate.toLocaleString('default', { month: 'long', year: 'numeric' });
+
+            // Group trades by date
+            const tradesByDate = {};
+            entries.forEach(trade => {
+                const date = trade.exitDate || trade.entryDate;
+                if (date) {
+                    const key = date.split('T')[0];
+                    if (!tradesByDate[key]) {
+                        tradesByDate[key] = { trades: [], pnl: 0 };
+                    }
+                    tradesByDate[key].trades.push(trade);
+                    tradesByDate[key].pnl += trade.pnl || 0;
+                }
+            });
+
+            // Calculate monthly stats
+            const monthStart = `${year}-${String(month + 1).padStart(2, '0')}`;
+            const monthTrades = entries.filter(t => (t.exitDate || t.entryDate || '').startsWith(monthStart));
+            const monthPnL = monthTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+            const monthWins = monthTrades.filter(t => t.pnl > 0).length;
+            const monthWinRate = monthTrades.length > 0 ? (monthWins / monthTrades.length) * 100 : 0;
+
+            // Generate calendar days
+            const days = [];
+            for (let i = 0; i < firstDay; i++) {
+                days.push(null); // Empty cells before first day
+            }
+            for (let d = 1; d <= daysInMonth; d++) {
+                const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                days.push({ day: d, dateKey, data: tradesByDate[dateKey] });
+            }
+
+            const prevMonth = () => setCurrentDate(new Date(year, month - 1, 1));
+            const nextMonth = () => setCurrentDate(new Date(year, month + 1, 1));
+            const goToToday = () => setCurrentDate(new Date());
+
+            return (
+                <div className="space-y-4">
+                    {/* Month Navigation */}
+                    <div className="flex justify-between items-center">
+                        <button onClick={prevMonth} className="p-2 hover:bg-gray-700 rounded-lg transition-colors">
+                            ← Prev
+                        </button>
+                        <div className="text-center">
+                            <div className="font-semibold text-lg">{monthName}</div>
+                            <button onClick={goToToday} className="text-xs text-blue-400 hover:text-blue-300">Today</button>
+                        </div>
+                        <button onClick={nextMonth} className="p-2 hover:bg-gray-700 rounded-lg transition-colors">
+                            Next →
+                        </button>
+                    </div>
+
+                    {/* Monthly Summary */}
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                        <div className="bg-gray-800/50 p-3 rounded-xl border border-gray-700">
+                            <div className="text-xs text-gray-500">Trades</div>
+                            <div className="font-bold">{monthTrades.length}</div>
+                        </div>
+                        <div className="bg-gray-800/50 p-3 rounded-xl border border-gray-700">
+                            <div className="text-xs text-gray-500">P&L</div>
+                            <div className={`font-bold ${monthPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                {monthPnL >= 0 ? '+' : ''}${monthPnL.toFixed(0)}
+                            </div>
+                        </div>
+                        <div className="bg-gray-800/50 p-3 rounded-xl border border-gray-700">
+                            <div className="text-xs text-gray-500">Win Rate</div>
+                            <div className={`font-bold ${monthWinRate >= 50 ? 'text-green-400' : 'text-red-400'}`}>
+                                {monthWinRate.toFixed(0)}%
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Calendar Grid */}
+                    <div className="bg-gray-800/50 rounded-xl border border-gray-700 overflow-hidden">
+                        {/* Day Headers */}
+                        <div className="grid grid-cols-7 text-center text-xs text-gray-500 border-b border-gray-700">
+                            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+                                <div key={d} className="py-2 font-medium">{d}</div>
+                            ))}
+                        </div>
+
+                        {/* Calendar Days */}
+                        <div className="grid grid-cols-7">
+                            {days.map((dayObj, idx) => {
+                                if (!dayObj) {
+                                    return <div key={`empty-${idx}`} className="aspect-square bg-gray-900/30" />;
+                                }
+
+                                const { day, dateKey, data } = dayObj;
+                                const isToday = dateKey === new Date().toISOString().split('T')[0];
+                                const hasTradesOnDay = data && data.trades.length > 0;
+                                const pnl = data?.pnl || 0;
+
+                                return (
+                                    <div
+                                        key={dateKey}
+                                        onClick={() => {
+                                            if (hasTradesOnDay) {
+                                                setSelectedDay(selectedDay === dateKey ? null : dateKey);
+                                                if (data.trades.length === 1) {
+                                                    onDayClick(dateKey, data.trades);
+                                                }
+                                            }
+                                        }}
+                                        className={`aspect-square p-1 border-b border-r border-gray-700/50 flex flex-col items-center justify-center cursor-pointer transition-colors
+                                            ${isToday ? 'ring-2 ring-blue-500 ring-inset' : ''}
+                                            ${hasTradesOnDay ? (pnl >= 0 ? 'bg-green-500/20 hover:bg-green-500/30' : 'bg-red-500/20 hover:bg-red-500/30') : 'hover:bg-gray-700/30'}
+                                            ${selectedDay === dateKey ? 'ring-2 ring-yellow-400 ring-inset' : ''}`}
+                                    >
+                                        <span className={`text-sm ${isToday ? 'font-bold text-blue-400' : ''}`}>{day}</span>
+                                        {hasTradesOnDay && (
+                                            <>
+                                                <span className={`text-xs font-bold ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                    {pnl >= 0 ? '+' : ''}{pnl.toFixed(0)}
+                                                </span>
+                                                <span className="text-[10px] text-gray-500">{data.trades.length}</span>
+                                            </>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    {/* Selected Day Details */}
+                    {selectedDay && tradesByDate[selectedDay] && tradesByDate[selectedDay].trades.length > 1 && (
+                        <div className="bg-gray-800/50 p-4 rounded-xl border border-yellow-500/30">
+                            <div className="text-sm font-semibold mb-3">
+                                {new Date(selectedDay).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })} - {tradesByDate[selectedDay].trades.length} Trades
+                            </div>
+                            <div className="space-y-2">
+                                {tradesByDate[selectedDay].trades.map(trade => (
+                                    <div
+                                        key={trade.id}
+                                        onClick={() => onDayClick(selectedDay, [trade])}
+                                        className={`p-3 rounded-lg cursor-pointer transition-colors ${
+                                            trade.pnl >= 0 ? 'bg-green-900/30 hover:bg-green-900/50' : 'bg-red-900/30 hover:bg-red-900/50'
+                                        }`}
+                                    >
+                                        <div className="flex justify-between items-center">
+                                            <span className="font-semibold">{trade.ticker}</span>
+                                            <span className={`font-bold ${trade.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                {trade.pnl >= 0 ? '+' : ''}${trade.pnl.toFixed(2)}
+                                            </span>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Day of Week Performance */}
+                    <div className="bg-gray-800/50 p-4 rounded-xl border border-gray-700">
+                        <div className="text-sm font-semibold mb-3">Day of Week Performance</div>
+                        <div className="grid grid-cols-7 gap-1 text-center text-xs">
+                            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, idx) => {
+                                const stats = dayOfWeekStats[idx];
+                                return (
+                                    <div key={day} className="p-2">
+                                        <div className="text-gray-500">{day}</div>
+                                        <div className={`font-bold ${stats?.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                            {stats?.trades > 0 ? `${stats.pnl >= 0 ? '+' : ''}$${stats.pnl.toFixed(0)}` : '-'}
+                                        </div>
+                                        <div className="text-gray-600">{stats?.trades || 0}</div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    {/* Legend */}
+                    <div className="flex justify-center gap-4 text-xs text-gray-500">
+                        <span><span className="inline-block w-3 h-3 bg-green-500/40 rounded mr-1"></span> Green Day</span>
+                        <span><span className="inline-block w-3 h-3 bg-red-500/40 rounded mr-1"></span> Red Day</span>
+                        <span><span className="inline-block w-3 h-3 border-2 border-blue-500 rounded mr-1"></span> Today</span>
+                    </div>
+                </div>
+            );
+        };
+
         // Main App Component
         const App = () => {
             const [positions, setPositions] = useState(samplePositions);
@@ -5709,6 +6227,14 @@
             const [showScalperMode, setShowScalperMode] = useState(false);
             const [tradeStats, setTradeStats] = useState(loadTradeStats());
             const [dailyGoal, setDailyGoal] = useState(loadDailyGoal());
+
+            // Trade Journal State
+            const [journalEntries, setJournalEntries] = useState(loadJournalEntries());
+            const [showAddTrade, setShowAddTrade] = useState(false);
+            const [journalView, setJournalView] = useState('list'); // 'list', 'stats', 'calendar'
+            const [journalFilter, setJournalFilter] = useState({ ticker: '', setup: '', result: 'all', dateRange: 'all' });
+            const [selectedJournalTrade, setSelectedJournalTrade] = useState(null);
+            const journalStats = calculateJournalStats(journalEntries);
 
             // Load enabled patterns from localStorage (default: popular patterns)
             // Also ensures any new POPULAR_PATTERNS are added for existing users
@@ -6928,7 +7454,13 @@
                                 onClick={() => setActiveTab('trending')}
                                 className={`flex-1 py-2 rounded-xl font-semibold transition-colors text-sm ${activeTab === 'trending' ? 'bg-blue-600' : 'bg-gray-800 hover:bg-gray-700'}`}
                             >
-                                🔥 Hot Stocks
+                                🔥 Hot
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('journal')}
+                                className={`flex-1 py-2 rounded-xl font-semibold transition-colors text-sm ${activeTab === 'journal' ? 'bg-blue-600' : 'bg-gray-800 hover:bg-gray-700'}`}
+                            >
+                                📓 Journal
                             </button>
                         </div>
 
@@ -7365,6 +7897,269 @@
                             </>
                         )}
 
+                        {/* Journal Tab */}
+                        {activeTab === 'journal' && (
+                            <>
+                                {/* Journal Header with Stats Summary */}
+                                <div className="flex justify-between items-center mb-4">
+                                    <div>
+                                        <h2 className="text-lg font-semibold">Trade Journal</h2>
+                                        <p className="text-xs text-gray-500">
+                                            {journalEntries.length} trades • {journalStats.winRate.toFixed(0)}% win rate
+                                        </p>
+                                    </div>
+                                    <button
+                                        onClick={() => setShowAddTrade(true)}
+                                        className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-xl text-sm font-semibold transition-colors"
+                                    >
+                                        + Log Trade
+                                    </button>
+                                </div>
+
+                                {/* Journal View Tabs */}
+                                <div className="flex gap-2 mb-4">
+                                    <button
+                                        onClick={() => setJournalView('list')}
+                                        className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${journalView === 'list' ? 'bg-gray-700' : 'bg-gray-800/50 hover:bg-gray-700/50'}`}
+                                    >
+                                        📋 Trades
+                                    </button>
+                                    <button
+                                        onClick={() => setJournalView('stats')}
+                                        className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${journalView === 'stats' ? 'bg-gray-700' : 'bg-gray-800/50 hover:bg-gray-700/50'}`}
+                                    >
+                                        📊 Stats
+                                    </button>
+                                    <button
+                                        onClick={() => setJournalView('calendar')}
+                                        className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${journalView === 'calendar' ? 'bg-gray-700' : 'bg-gray-800/50 hover:bg-gray-700/50'}`}
+                                    >
+                                        📅 Calendar
+                                    </button>
+                                </div>
+
+                                {/* Stats View */}
+                                {journalView === 'stats' && (
+                                    <div className="space-y-4">
+                                        {/* Main Stats Grid */}
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div className="bg-gray-800/50 p-4 rounded-xl border border-gray-700">
+                                                <div className="text-xs text-gray-500 mb-1">Total P&L</div>
+                                                <div className={`text-2xl font-bold ${journalStats.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                    {journalStats.totalPnL >= 0 ? '+' : ''}${journalStats.totalPnL.toFixed(2)}
+                                                </div>
+                                            </div>
+                                            <div className="bg-gray-800/50 p-4 rounded-xl border border-gray-700">
+                                                <div className="text-xs text-gray-500 mb-1">Win Rate</div>
+                                                <div className={`text-2xl font-bold ${journalStats.winRate >= 50 ? 'text-green-400' : 'text-red-400'}`}>
+                                                    {journalStats.winRate.toFixed(1)}%
+                                                </div>
+                                            </div>
+                                            <div className="bg-gray-800/50 p-4 rounded-xl border border-gray-700">
+                                                <div className="text-xs text-gray-500 mb-1">Profit Factor</div>
+                                                <div className={`text-2xl font-bold ${journalStats.profitFactor >= 1 ? 'text-green-400' : 'text-red-400'}`}>
+                                                    {journalStats.profitFactor === Infinity ? '∞' : journalStats.profitFactor.toFixed(2)}
+                                                </div>
+                                            </div>
+                                            <div className="bg-gray-800/50 p-4 rounded-xl border border-gray-700">
+                                                <div className="text-xs text-gray-500 mb-1">Avg R-Multiple</div>
+                                                <div className={`text-2xl font-bold ${journalStats.avgRMultiple >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                    {journalStats.avgRMultiple.toFixed(2)}R
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Win/Loss Breakdown */}
+                                        <div className="bg-gray-800/50 p-4 rounded-xl border border-gray-700">
+                                            <div className="text-sm font-semibold mb-3">Win/Loss Breakdown</div>
+                                            <div className="flex justify-between items-center mb-2">
+                                                <span className="text-green-400">Wins: {journalStats.wins}</span>
+                                                <span className="text-red-400">Losses: {journalStats.losses}</span>
+                                            </div>
+                                            <div className="w-full bg-gray-700 rounded-full h-3">
+                                                <div
+                                                    className="bg-green-500 h-3 rounded-full"
+                                                    style={{ width: `${journalStats.totalTrades > 0 ? (journalStats.wins / journalStats.totalTrades) * 100 : 0}%` }}
+                                                />
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-4 mt-4 text-sm">
+                                                <div>
+                                                    <span className="text-gray-500">Avg Win:</span>
+                                                    <span className="text-green-400 ml-2">+${journalStats.avgWin.toFixed(2)}</span>
+                                                </div>
+                                                <div>
+                                                    <span className="text-gray-500">Avg Loss:</span>
+                                                    <span className="text-red-400 ml-2">-${journalStats.avgLoss.toFixed(2)}</span>
+                                                </div>
+                                                <div>
+                                                    <span className="text-gray-500">Largest Win:</span>
+                                                    <span className="text-green-400 ml-2">+${journalStats.largestWin.toFixed(2)}</span>
+                                                </div>
+                                                <div>
+                                                    <span className="text-gray-500">Largest Loss:</span>
+                                                    <span className="text-red-400 ml-2">${journalStats.largestLoss.toFixed(2)}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Current Streak */}
+                                        <div className="bg-gray-800/50 p-4 rounded-xl border border-gray-700">
+                                            <div className="text-sm font-semibold mb-2">Current Streak</div>
+                                            <div className={`text-xl font-bold ${journalStats.streakType === 'win' ? 'text-green-400' : journalStats.streakType === 'loss' ? 'text-red-400' : 'text-gray-400'}`}>
+                                                {journalStats.currentStreak > 0 ? (
+                                                    <>
+                                                        {journalStats.streakType === 'win' ? '🔥' : '❄️'} {journalStats.currentStreak} {journalStats.streakType === 'win' ? 'Wins' : 'Losses'}
+                                                    </>
+                                                ) : (
+                                                    'No streak'
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        {/* Setup Performance */}
+                                        {Object.keys(journalStats.setupStats).length > 0 && (
+                                            <div className="bg-gray-800/50 p-4 rounded-xl border border-gray-700">
+                                                <div className="text-sm font-semibold mb-3">Setup Performance</div>
+                                                <div className="space-y-2">
+                                                    {Object.entries(journalStats.setupStats)
+                                                        .sort((a, b) => b[1].pnl - a[1].pnl)
+                                                        .slice(0, 5)
+                                                        .map(([setup, stats]) => {
+                                                            const setupInfo = SETUP_TYPES.find(s => s.id === setup);
+                                                            const winRate = stats.trades > 0 ? (stats.wins / stats.trades) * 100 : 0;
+                                                            return (
+                                                                <div key={setup} className="flex justify-between items-center text-sm">
+                                                                    <span>{setupInfo?.emoji} {setupInfo?.label || setup}</span>
+                                                                    <div className="flex items-center gap-3">
+                                                                        <span className="text-gray-500">{stats.trades} trades</span>
+                                                                        <span className={winRate >= 50 ? 'text-green-400' : 'text-red-400'}>{winRate.toFixed(0)}%</span>
+                                                                        <span className={stats.pnl >= 0 ? 'text-green-400' : 'text-red-400'}>
+                                                                            {stats.pnl >= 0 ? '+' : ''}${stats.pnl.toFixed(0)}
+                                                                        </span>
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Mistake Analysis */}
+                                        {Object.keys(journalStats.mistakeStats).length > 0 && !journalStats.mistakeStats.none && (
+                                            <div className="bg-gray-800/50 p-4 rounded-xl border border-red-500/30">
+                                                <div className="text-sm font-semibold mb-3 text-red-400">💀 Costly Mistakes</div>
+                                                <div className="space-y-2">
+                                                    {Object.entries(journalStats.mistakeStats)
+                                                        .filter(([m]) => m !== 'none')
+                                                        .sort((a, b) => b[1].totalLoss - a[1].totalLoss)
+                                                        .slice(0, 5)
+                                                        .map(([mistake, stats]) => {
+                                                            const mistakeInfo = MISTAKE_TYPES.find(m => m.id === mistake);
+                                                            return (
+                                                                <div key={mistake} className="flex justify-between items-center text-sm">
+                                                                    <span>{mistakeInfo?.emoji} {mistakeInfo?.label || mistake}</span>
+                                                                    <div className="flex items-center gap-3">
+                                                                        <span className="text-gray-500">{stats.count}x</span>
+                                                                        <span className="text-red-400">-${stats.totalLoss.toFixed(0)}</span>
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {journalEntries.length === 0 && (
+                                            <div className="text-center py-8 text-gray-500">
+                                                <p className="text-4xl mb-2">📊</p>
+                                                <p>No trades logged yet</p>
+                                                <p className="text-sm">Log some trades to see your stats</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {/* List View */}
+                                {journalView === 'list' && (
+                                    <div className="space-y-3">
+                                        {journalEntries.length === 0 ? (
+                                            <div className="text-center py-12 text-gray-500">
+                                                <p className="text-5xl mb-3">📓</p>
+                                                <p className="font-semibold">Your Trade Journal</p>
+                                                <p className="text-sm mt-2">Log your trades to track performance,<br/>identify patterns, and improve.</p>
+                                                <button
+                                                    onClick={() => setShowAddTrade(true)}
+                                                    className="mt-4 px-6 py-2 bg-green-600 hover:bg-green-500 rounded-xl text-sm font-semibold"
+                                                >
+                                                    Log Your First Trade
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            [...journalEntries]
+                                                .sort((a, b) => new Date(b.exitDate || b.entryDate) - new Date(a.exitDate || a.entryDate))
+                                                .map(trade => {
+                                                    const grade = gradeJournalTrade(trade);
+                                                    const setupInfo = SETUP_TYPES.find(s => s.id === trade.setup);
+                                                    return (
+                                                        <div
+                                                            key={trade.id}
+                                                            onClick={() => setSelectedJournalTrade(trade)}
+                                                            className={`p-4 rounded-xl border cursor-pointer transition-colors hover:border-gray-500 ${
+                                                                trade.pnl >= 0 ? 'bg-green-900/20 border-green-500/30' : 'bg-red-900/20 border-red-500/30'
+                                                            }`}
+                                                        >
+                                                            <div className="flex justify-between items-start">
+                                                                <div>
+                                                                    <div className="flex items-center gap-2">
+                                                                        <span className="font-bold text-lg">{trade.ticker}</span>
+                                                                        <span className={`text-xs px-2 py-0.5 rounded ${trade.side === 'long' ? 'bg-green-500/30 text-green-300' : 'bg-red-500/30 text-red-300'}`}>
+                                                                            {trade.side?.toUpperCase()}
+                                                                        </span>
+                                                                        {setupInfo && (
+                                                                            <span className="text-xs text-gray-400">{setupInfo.emoji} {setupInfo.label}</span>
+                                                                        )}
+                                                                    </div>
+                                                                    <div className="text-xs text-gray-500 mt-1">
+                                                                        {new Date(trade.entryDate).toLocaleDateString()} •
+                                                                        ${trade.entryPrice?.toFixed(2)} → ${trade.exitPrice?.toFixed(2)}
+                                                                    </div>
+                                                                </div>
+                                                                <div className="text-right">
+                                                                    <div className={`font-bold text-lg ${trade.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                                        {trade.pnl >= 0 ? '+' : ''}${trade.pnl?.toFixed(2)}
+                                                                    </div>
+                                                                    <div className={`text-sm font-bold ${grade.color}`}>
+                                                                        {grade.grade}
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                            {trade.notes && (
+                                                                <div className="mt-2 text-xs text-gray-400 line-clamp-1">
+                                                                    📝 {trade.notes}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })
+                                        )}
+                                    </div>
+                                )}
+
+                                {/* Calendar View */}
+                                {journalView === 'calendar' && (
+                                    <CalendarView
+                                        entries={journalEntries}
+                                        onDayClick={(date, trades) => {
+                                            if (trades.length === 1) {
+                                                setSelectedJournalTrade(trades[0]);
+                                            }
+                                        }}
+                                        dayOfWeekStats={journalStats.dayOfWeekStats}
+                                    />
+                                )}
+                            </>
+                        )}
+
                         {/* Disclaimer */}
                         <div className="mt-8 p-4 bg-gray-800/50 border border-gray-700 rounded-xl text-xs text-gray-500 text-center">
                             ⚖️ Educational tool only. Not financial advice. All trading decisions are yours. You can lose money trading.
@@ -7449,6 +8244,355 @@
                             setDailyGoal={setDailyGoal}
                             onClose={() => setShowScalperMode(false)}
                         />
+                    )}
+
+                    {/* Add Trade Modal */}
+                    {showAddTrade && (
+                        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+                            <div className="bg-gray-900 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+                                <div className="p-4 border-b border-gray-700 flex justify-between items-center sticky top-0 bg-gray-900 z-10">
+                                    <h2 className="text-xl font-bold">📓 Log Trade</h2>
+                                    <button onClick={() => setShowAddTrade(false)} className="text-gray-400 hover:text-white text-2xl">✕</button>
+                                </div>
+                                <form
+                                    className="p-4 space-y-4"
+                                    onSubmit={(e) => {
+                                        e.preventDefault();
+                                        const form = e.target;
+                                        const entryPrice = parseFloat(form.entryPrice.value);
+                                        const exitPrice = parseFloat(form.exitPrice.value);
+                                        const quantity = parseFloat(form.quantity.value) || 1;
+                                        const side = form.side.value;
+                                        const pnl = side === 'long'
+                                            ? (exitPrice - entryPrice) * quantity
+                                            : (entryPrice - exitPrice) * quantity;
+
+                                        const newTrade = {
+                                            id: Date.now(),
+                                            ticker: form.ticker.value.toUpperCase(),
+                                            side,
+                                            assetType: form.assetType.value,
+                                            entryPrice,
+                                            exitPrice,
+                                            quantity,
+                                            entryDate: form.entryDate.value,
+                                            exitDate: form.exitDate.value,
+                                            pnl,
+                                            fees: parseFloat(form.fees.value) || 0,
+                                            setup: form.setup.value,
+                                            mistakes: Array.from(form.querySelectorAll('input[name="mistakes"]:checked')).map(el => el.value),
+                                            emotionBefore: form.emotionBefore.value,
+                                            emotionAfter: form.emotionAfter.value,
+                                            followedPlan: form.followedPlan.checked,
+                                            riskAmount: parseFloat(form.riskAmount.value) || null,
+                                            notes: form.notes.value,
+                                            screenshot: document.getElementById('screenshot-preview').src?.startsWith('data:')
+                                                ? document.getElementById('screenshot-preview').src
+                                                : null
+                                        };
+
+                                        const updated = [...journalEntries, newTrade];
+                                        setJournalEntries(updated);
+                                        saveJournalEntries(updated);
+                                        setShowAddTrade(false);
+                                    }}
+                                >
+                                    {/* Basic Info */}
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="text-xs text-gray-500 block mb-1">Ticker *</label>
+                                            <input name="ticker" type="text" required placeholder="AAPL" className="w-full p-3 bg-gray-800 rounded-xl border border-gray-700 focus:border-blue-500 outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-gray-500 block mb-1">Side *</label>
+                                            <select name="side" className="w-full p-3 bg-gray-800 rounded-xl border border-gray-700">
+                                                <option value="long">Long</option>
+                                                <option value="short">Short</option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <label className="text-xs text-gray-500 block mb-1">Asset Type</label>
+                                        <select name="assetType" className="w-full p-3 bg-gray-800 rounded-xl border border-gray-700">
+                                            <option value="stock">Stock</option>
+                                            <option value="option">Option</option>
+                                            <option value="crypto">Crypto</option>
+                                            <option value="futures">Futures</option>
+                                        </select>
+                                    </div>
+
+                                    {/* Prices */}
+                                    <div className="grid grid-cols-3 gap-3">
+                                        <div>
+                                            <label className="text-xs text-gray-500 block mb-1">Entry $ *</label>
+                                            <input name="entryPrice" type="number" step="0.01" required placeholder="100.00" className="w-full p-3 bg-gray-800 rounded-xl border border-gray-700 focus:border-blue-500 outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-gray-500 block mb-1">Exit $ *</label>
+                                            <input name="exitPrice" type="number" step="0.01" required placeholder="105.00" className="w-full p-3 bg-gray-800 rounded-xl border border-gray-700 focus:border-blue-500 outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-gray-500 block mb-1">Qty</label>
+                                            <input name="quantity" type="number" step="1" defaultValue="1" placeholder="100" className="w-full p-3 bg-gray-800 rounded-xl border border-gray-700 focus:border-blue-500 outline-none" />
+                                        </div>
+                                    </div>
+
+                                    {/* Dates */}
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="text-xs text-gray-500 block mb-1">Entry Date</label>
+                                            <input name="entryDate" type="datetime-local" defaultValue={new Date().toISOString().slice(0, 16)} className="w-full p-3 bg-gray-800 rounded-xl border border-gray-700 focus:border-blue-500 outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-gray-500 block mb-1">Exit Date</label>
+                                            <input name="exitDate" type="datetime-local" defaultValue={new Date().toISOString().slice(0, 16)} className="w-full p-3 bg-gray-800 rounded-xl border border-gray-700 focus:border-blue-500 outline-none" />
+                                        </div>
+                                    </div>
+
+                                    {/* Risk & Fees */}
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="text-xs text-gray-500 block mb-1">Risk Amount ($)</label>
+                                            <input name="riskAmount" type="number" step="0.01" placeholder="50.00" className="w-full p-3 bg-gray-800 rounded-xl border border-gray-700 focus:border-blue-500 outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-gray-500 block mb-1">Fees ($)</label>
+                                            <input name="fees" type="number" step="0.01" placeholder="0.00" className="w-full p-3 bg-gray-800 rounded-xl border border-gray-700 focus:border-blue-500 outline-none" />
+                                        </div>
+                                    </div>
+
+                                    {/* Setup Type */}
+                                    <div>
+                                        <label className="text-xs text-gray-500 block mb-2">Setup Type</label>
+                                        <select name="setup" className="w-full p-3 bg-gray-800 rounded-xl border border-gray-700">
+                                            {SETUP_TYPES.map(s => (
+                                                <option key={s.id} value={s.id}>{s.emoji} {s.label}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    {/* Emotions */}
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="text-xs text-gray-500 block mb-2">Emotion Before</label>
+                                            <select name="emotionBefore" className="w-full p-3 bg-gray-800 rounded-xl border border-gray-700">
+                                                {EMOTIONS.map(e => (
+                                                    <option key={e.id} value={e.id}>{e.emoji} {e.label}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-gray-500 block mb-2">Emotion After</label>
+                                            <select name="emotionAfter" className="w-full p-3 bg-gray-800 rounded-xl border border-gray-700">
+                                                {EMOTIONS.map(e => (
+                                                    <option key={e.id} value={e.id}>{e.emoji} {e.label}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    {/* Mistakes */}
+                                    <div>
+                                        <label className="text-xs text-gray-500 block mb-2">Mistakes Made</label>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            {MISTAKE_TYPES.map(m => (
+                                                <label key={m.id} className="flex items-center gap-2 text-sm p-2 bg-gray-800/50 rounded-lg cursor-pointer hover:bg-gray-700/50">
+                                                    <input type="checkbox" name="mistakes" value={m.id} className="rounded" />
+                                                    <span>{m.emoji} {m.label}</span>
+                                                </label>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* Followed Plan */}
+                                    <label className="flex items-center gap-3 p-3 bg-gray-800/50 rounded-xl cursor-pointer">
+                                        <input type="checkbox" name="followedPlan" defaultChecked className="w-5 h-5 rounded" />
+                                        <span>I followed my trading plan</span>
+                                    </label>
+
+                                    {/* Notes */}
+                                    <div>
+                                        <label className="text-xs text-gray-500 block mb-1">Notes & Lessons</label>
+                                        <textarea name="notes" rows="3" placeholder="What did you learn? Why did you take this trade?" className="w-full p-3 bg-gray-800 rounded-xl border border-gray-700 focus:border-blue-500 outline-none resize-none" />
+                                    </div>
+
+                                    {/* Screenshot Upload */}
+                                    <div>
+                                        <label className="text-xs text-gray-500 block mb-1">Chart Screenshot</label>
+                                        <div className="relative">
+                                            <input
+                                                type="file"
+                                                name="screenshot"
+                                                accept="image/*"
+                                                className="hidden"
+                                                id="screenshot-upload"
+                                                onChange={(e) => {
+                                                    const file = e.target.files[0];
+                                                    const preview = document.getElementById('screenshot-preview');
+                                                    const previewContainer = document.getElementById('screenshot-preview-container');
+                                                    if (file) {
+                                                        const reader = new FileReader();
+                                                        reader.onload = (event) => {
+                                                            preview.src = event.target.result;
+                                                            previewContainer.classList.remove('hidden');
+                                                        };
+                                                        reader.readAsDataURL(file);
+                                                    } else {
+                                                        previewContainer.classList.add('hidden');
+                                                    }
+                                                }}
+                                            />
+                                            <label
+                                                htmlFor="screenshot-upload"
+                                                className="flex items-center justify-center gap-2 p-4 bg-gray-800 rounded-xl border border-gray-700 border-dashed cursor-pointer hover:border-gray-500 transition-colors"
+                                            >
+                                                <span className="text-2xl">📷</span>
+                                                <span className="text-sm text-gray-400">Tap to add chart screenshot</span>
+                                            </label>
+                                            <div id="screenshot-preview-container" className="hidden mt-2">
+                                                <div className="relative">
+                                                    <img id="screenshot-preview" className="w-full rounded-xl" alt="Preview" />
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            document.getElementById('screenshot-upload').value = '';
+                                                            document.getElementById('screenshot-preview-container').classList.add('hidden');
+                                                        }}
+                                                        className="absolute top-2 right-2 bg-red-600 hover:bg-red-500 rounded-full w-8 h-8 flex items-center justify-center text-sm"
+                                                    >
+                                                        ✕
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Submit */}
+                                    <button type="submit" className="w-full py-4 bg-green-600 hover:bg-green-500 rounded-xl font-bold text-lg transition-colors">
+                                        Log Trade
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Trade Detail Modal */}
+                    {selectedJournalTrade && (
+                        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+                            <div className="bg-gray-900 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+                                <div className="p-4 border-b border-gray-700 flex justify-between items-center sticky top-0 bg-gray-900">
+                                    <h2 className="text-xl font-bold">{selectedJournalTrade.ticker} Trade Review</h2>
+                                    <button onClick={() => setSelectedJournalTrade(null)} className="text-gray-400 hover:text-white text-2xl">✕</button>
+                                </div>
+                                <div className="p-4 space-y-4">
+                                    {/* P&L Header */}
+                                    <div className={`text-center p-6 rounded-xl ${selectedJournalTrade.pnl >= 0 ? 'bg-green-900/30' : 'bg-red-900/30'}`}>
+                                        <div className={`text-4xl font-bold ${selectedJournalTrade.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                            {selectedJournalTrade.pnl >= 0 ? '+' : ''}${selectedJournalTrade.pnl?.toFixed(2)}
+                                        </div>
+                                        <div className="text-sm text-gray-400 mt-1">
+                                            {selectedJournalTrade.side?.toUpperCase()} • ${selectedJournalTrade.entryPrice?.toFixed(2)} → ${selectedJournalTrade.exitPrice?.toFixed(2)}
+                                        </div>
+                                        <div className={`text-2xl font-bold mt-2 ${gradeJournalTrade(selectedJournalTrade).color}`}>
+                                            Grade: {gradeJournalTrade(selectedJournalTrade).grade}
+                                        </div>
+                                    </div>
+
+                                    {/* Voice of Logic Review */}
+                                    <div className="p-4 bg-blue-900/20 border border-blue-500/30 rounded-xl">
+                                        <div className="text-sm font-semibold mb-2">🧠 Voice of Logic Says:</div>
+                                        <p className="text-sm text-gray-300">{getTradeReview(selectedJournalTrade, settings.personality)}</p>
+                                    </div>
+
+                                    {/* Trade Details */}
+                                    <div className="grid grid-cols-2 gap-3 text-sm">
+                                        <div className="bg-gray-800/50 p-3 rounded-xl">
+                                            <div className="text-gray-500">Setup</div>
+                                            <div>{SETUP_TYPES.find(s => s.id === selectedJournalTrade.setup)?.emoji} {SETUP_TYPES.find(s => s.id === selectedJournalTrade.setup)?.label}</div>
+                                        </div>
+                                        <div className="bg-gray-800/50 p-3 rounded-xl">
+                                            <div className="text-gray-500">R-Multiple</div>
+                                            <div className={selectedJournalTrade.riskAmount ? (selectedJournalTrade.pnl / selectedJournalTrade.riskAmount >= 0 ? 'text-green-400' : 'text-red-400') : ''}>
+                                                {selectedJournalTrade.riskAmount ? `${(selectedJournalTrade.pnl / selectedJournalTrade.riskAmount).toFixed(2)}R` : 'N/A'}
+                                            </div>
+                                        </div>
+                                        <div className="bg-gray-800/50 p-3 rounded-xl">
+                                            <div className="text-gray-500">Emotion Before</div>
+                                            <div>{EMOTIONS.find(e => e.id === selectedJournalTrade.emotionBefore)?.emoji} {EMOTIONS.find(e => e.id === selectedJournalTrade.emotionBefore)?.label}</div>
+                                        </div>
+                                        <div className="bg-gray-800/50 p-3 rounded-xl">
+                                            <div className="text-gray-500">Followed Plan</div>
+                                            <div>{selectedJournalTrade.followedPlan ? '✅ Yes' : '❌ No'}</div>
+                                        </div>
+                                    </div>
+
+                                    {/* Mistakes */}
+                                    {selectedJournalTrade.mistakes?.length > 0 && !selectedJournalTrade.mistakes.includes('none') && (
+                                        <div className="p-3 bg-red-900/20 border border-red-500/30 rounded-xl">
+                                            <div className="text-sm font-semibold text-red-400 mb-2">Mistakes Made:</div>
+                                            <div className="flex flex-wrap gap-2">
+                                                {selectedJournalTrade.mistakes.map(m => {
+                                                    const mistake = MISTAKE_TYPES.find(mt => mt.id === m);
+                                                    return (
+                                                        <span key={m} className="text-xs bg-red-500/20 px-2 py-1 rounded">
+                                                            {mistake?.emoji} {mistake?.label}
+                                                        </span>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Notes */}
+                                    {selectedJournalTrade.notes && (
+                                        <div className="p-3 bg-gray-800/50 rounded-xl">
+                                            <div className="text-sm font-semibold mb-2">📝 Notes</div>
+                                            <p className="text-sm text-gray-300">{selectedJournalTrade.notes}</p>
+                                        </div>
+                                    )}
+
+                                    {/* Screenshot */}
+                                    {selectedJournalTrade.screenshot && (
+                                        <div className="rounded-xl overflow-hidden">
+                                            <div className="text-sm font-semibold mb-2">📷 Chart Screenshot</div>
+                                            <img
+                                                src={selectedJournalTrade.screenshot}
+                                                alt="Trade chart"
+                                                className="w-full rounded-xl cursor-pointer hover:opacity-90 transition-opacity"
+                                                onClick={() => {
+                                                    // Open full screen preview
+                                                    const overlay = document.createElement('div');
+                                                    overlay.className = 'fixed inset-0 bg-black/95 z-[100] flex items-center justify-center p-4';
+                                                    overlay.onclick = () => overlay.remove();
+                                                    const img = document.createElement('img');
+                                                    img.src = selectedJournalTrade.screenshot;
+                                                    img.className = 'max-w-full max-h-full object-contain';
+                                                    overlay.appendChild(img);
+                                                    document.body.appendChild(overlay);
+                                                }}
+                                            />
+                                            <p className="text-xs text-gray-500 text-center mt-1">Tap to enlarge</p>
+                                        </div>
+                                    )}
+
+                                    {/* Delete Button */}
+                                    <button
+                                        onClick={() => {
+                                            if (confirm('Delete this trade from journal?')) {
+                                                const updated = journalEntries.filter(t => t.id !== selectedJournalTrade.id);
+                                                setJournalEntries(updated);
+                                                saveJournalEntries(updated);
+                                                setSelectedJournalTrade(null);
+                                            }
+                                        }}
+                                        className="w-full py-3 bg-red-600/20 hover:bg-red-600/40 border border-red-500/30 rounded-xl text-red-400 text-sm"
+                                    >
+                                        🗑️ Delete Trade
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     )}
                 </div>
             );
