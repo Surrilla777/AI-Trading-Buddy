@@ -5454,12 +5454,38 @@
                                         </div>
                                         <div className="text-xs text-gray-400">
                                             {pushEnabled
-                                                ? 'You\'ll get notifications even when browser is closed'
+                                                ? `${customAlerts.filter(a => a.active).length} alerts synced to server`
                                                 : fcmError || 'Click to enable notifications when browser is closed'}
                                         </div>
                                     </div>
                                 </div>
-                                {!pushEnabled && (
+                                {pushEnabled ? (
+                                    <button
+                                        onClick={async () => {
+                                            const token = fcmToken || localStorage.getItem('fcmToken');
+                                            const activeAlerts = customAlerts.filter(a => a.active).map(a => ({
+                                                id: a.id,
+                                                ticker: a.ticker,
+                                                type: a.type,
+                                                value: parseFloat(a.value)
+                                            }));
+                                            try {
+                                                const response = await fetch('/api/register-push-token', {
+                                                    method: 'POST',
+                                                    headers: { 'Content-Type': 'application/json' },
+                                                    body: JSON.stringify({ token, alerts: activeAlerts })
+                                                });
+                                                const result = await response.json();
+                                                alert(`Synced ${activeAlerts.length} alerts to server!`);
+                                            } catch (err) {
+                                                alert('Sync failed: ' + err.message);
+                                            }
+                                        }}
+                                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm font-medium whitespace-nowrap"
+                                    >
+                                        Sync Now
+                                    </button>
+                                ) : (
                                     <button
                                         onClick={async () => {
                                             try {
@@ -5487,7 +5513,7 @@
                                                                         id: a.id,
                                                                         ticker: a.ticker,
                                                                         type: a.type,
-                                                                        value: a.value
+                                                                        value: parseFloat(a.value)
                                                                     }))
                                                                 })
                                                             });
