@@ -5282,7 +5282,7 @@
         };
 
         // Alert Manager Component
-        const AlertManager = ({ isOpen, onClose, customAlerts, setCustomAlerts, alertHistory, setAlertHistory, newsWatchlist, setNewsWatchlist }) => {
+        const AlertManager = ({ isOpen, onClose, customAlerts, setCustomAlerts, alertHistory, setAlertHistory, newsWatchlist, setNewsWatchlist, pushEnabled, setPushEnabled, fcmToken, setFcmToken, fcmError, setFcmError }) => {
             const [activeSection, setActiveSection] = useState('create'); // create, active, history, news
             const [newAlert, setNewAlert] = useState({
                 ticker: '',
@@ -8290,6 +8290,12 @@
                         setAlertHistory={setAlertHistory}
                         newsWatchlist={newsWatchlist}
                         setNewsWatchlist={setNewsWatchlist}
+                        pushEnabled={pushEnabled}
+                        setPushEnabled={setPushEnabled}
+                        fcmToken={fcmToken}
+                        setFcmToken={setFcmToken}
+                        fcmError={fcmError}
+                        setFcmError={setFcmError}
                     />
 
                     {/* Real-time Alert Notifications */}
