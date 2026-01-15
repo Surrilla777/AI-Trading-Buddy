@@ -1,0 +1,54 @@
+name: Email Forwarder
+
+on:
+  schedule:
+    # Runs every 3 hours during active hours (8am-11pm PST)
+    # PST is UTC-8, so 8am PST = 16:00 UTC, 11pm PST = 07:00 UTC
+    - cron: '0 16,19,22,1,4 * * *'  # 8am, 11am, 2pm, 5pm, 8pm PST
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  forward-emails:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: npm install googleapis
+
+      - name: Create credentials file
+        run: echo '${{ secrets.GMAIL_CREDENTIALS }}' > gmail-credentials.json
+
+      - name: Create token file
+        run: echo '${{ secrets.GMAIL_TOKEN }}' > gmail-token-forward.json
+
+      - name: Download scan results
+        run: echo '${{ secrets.SCAN_RESULTS }}' > scan-results.json
+
+      - name: Download tracker
+        env:
+          TRACKER: ${{ secrets.EMAIL_TRACKER }}
+        run: |
+          if [ -n "$TRACKER" ]; then
+            echo "$TRACKER" > email-tracker.json
+          fi
+
+      - name: Run email forwarder
+        id: forward
+        run: node email-forwarder.js --confirm
+        continue-on-error: true
+
+      - name: Upload updated tracker
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: email-tracker
+          path: email-tracker.json
+          retention-days: 30

@@ -9,8 +9,23 @@ node_modules/
 # Push notification tokens (contains user data)
 push-tokens.json
 
+# SnapTrade user data (contains secrets)
+snaptrade-users.json
+
 # Firebase service account (sensitive)
 firebase-service-account.json
+
+# Gmail credentials and tokens (sensitive)
+gmail-credentials.json
+gmail-token.json
+gmail-token-forward.json
+email-tracker.json
+scan-results.json
+scan-results.csv
+sent-emails.log
+
+# Account backups
+account-surrilla777/
 
 # OS files
 .DS_Store
