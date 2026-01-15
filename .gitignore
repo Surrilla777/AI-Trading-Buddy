@@ -20,8 +20,6 @@ gmail-credentials.json
 gmail-token.json
 gmail-token-forward.json
 email-tracker.json
-scan-results.json
-scan-results.csv
 sent-emails.log
 
 # Account backups
