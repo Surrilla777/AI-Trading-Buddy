@@ -3,7 +3,7 @@
  * A simple web interface for scanning Gmail and forwarding spam
  */
 
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 const express = require('express');
 const { google } = require('googleapis');
 const path = require('path');
@@ -15,7 +15,7 @@ const PORT = process.env.PORT || 3001;
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// OAuth2 config - set these in .env or environment variables
+// OAuth2 config - set in .env file (local) or Render dashboard (hosted)
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 const REDIRECT_URI = process.env.REDIRECT_URI || 'http://localhost:3001/auth/callback';
