@@ -149,17 +149,25 @@ function isSuspiciousSender(fromHeader) {
     return false;
 }
 
-// Check subject for spam patterns
+// Check subject for PROMOTIONAL SPAM (not just any $ or %)
 function hasSpammySubject(subject) {
     if (!subject) return { match: false };
 
-    const dollarMatch = subject.match(/\$\d+/);
-    if (dollarMatch) return { match: true, reason: `Dollar amount: ${dollarMatch[0]}` };
+    // DOLLAR DISCOUNT OFFERS like "$50 off", "save $20" - NOT just any $
+    const dollarDiscountMatch = subject.match(/(\$\d+\s*(off|discount|savings?))|((save|get)\s*\$\d+)/i);
+    if (dollarDiscountMatch) return { match: true, reason: `Dollar discount: ${dollarDiscountMatch[0]}` };
 
-    const percentMatch = subject.match(/\d+\s*%/);
-    if (percentMatch) return { match: true, reason: `Percentage: ${percentMatch[0]}` };
+    // PERCENTAGE DISCOUNT OFFERS like "50% off" - NOT just any %
+    const percentDiscountMatch = subject.match(/\d+\s*%\s*(off|discount|savings?)|(save\s*\d+\s*%)/i);
+    if (percentDiscountMatch) return { match: true, reason: `Percent discount: ${percentDiscountMatch[0]}` };
 
-    if (/\bfree\b/i.test(subject)) return { match: true, reason: 'Contains "FREE"' };
+    // FREE OFFERS - things being offered for free
+    const freeOfferMatch = subject.match(/\bfree\s+(shipping|gift|trial|sample|delivery|bonus|access|download|ebook|guide|consultation)|get\s+\w+\s+free|buy\s+\w+\s+get\s+\w+\s+free|\bfree\b.*\boffer\b/i);
+    if (freeOfferMatch) return { match: true, reason: `Free offer: ${freeOfferMatch[0]}` };
+
+    // PROMOTIONAL SPAM WORDS
+    const promoMatch = subject.match(/(clearance|marked\s*down|on\s+sale|limited\s+time|act\s+now|hurry|expires?\s+(soon|today|tonight)|last\s+chance|don'?t\s+miss|exclusive\s+(deal|offer)|flash\s+sale|doorbuster|blowout|promo\s*code|discount\s*code|coupon\s*code|use\s+code)/i);
+    if (promoMatch) return { match: true, reason: `Promo language: ${promoMatch[0]}` };
 
     for (const pattern of spamConfig.subjectPatterns) {
         if (subject.toLowerCase().includes(pattern.toLowerCase())) {
@@ -170,15 +178,25 @@ function hasSpammySubject(subject) {
     return { match: false };
 }
 
-// Check body for spam patterns
+// Check body for PROMOTIONAL SPAM (not just any $ or %)
 function hasSpammyBody(snippet) {
     if (!snippet) return { match: false };
 
-    const dollarMatch = snippet.match(/\$\d+/);
-    if (dollarMatch) return { match: true, reason: `Dollar amount in body: ${dollarMatch[0]}` };
+    // DOLLAR DISCOUNT OFFERS - NOT just any dollar amount
+    const dollarDiscountMatch = snippet.match(/(\$\d+\s*(off|discount|savings?))|((save|get)\s*\$\d+)/i);
+    if (dollarDiscountMatch) return { match: true, reason: `Dollar discount: ${dollarDiscountMatch[0]}` };
 
-    const percentMatch = snippet.match(/\d+\s*%\s*(off|discount|savings?)/i);
-    if (percentMatch) return { match: true, reason: `Discount in body: ${percentMatch[0]}` };
+    // PERCENTAGE DISCOUNT OFFERS
+    const percentDiscountMatch = snippet.match(/\d+\s*%\s*(off|discount|savings?)|(save\s*\d+\s*%)/i);
+    if (percentDiscountMatch) return { match: true, reason: `Percent discount: ${percentDiscountMatch[0]}` };
+
+    // FREE OFFERS
+    const freeOfferMatch = snippet.match(/\bfree\s+(shipping|gift|trial|sample|delivery|bonus|access|download)|get\s+\w+\s+free|\bfree\b.*\boffer\b/i);
+    if (freeOfferMatch) return { match: true, reason: `Free offer: ${freeOfferMatch[0]}` };
+
+    // PROMOTIONAL SPAM WORDS
+    const promoMatch = snippet.match(/(clearance|marked\s*down|on\s+sale|limited\s+time|act\s+now|hurry|expires?\s+(soon|today|tonight)|last\s+chance|don'?t\s+miss|exclusive\s+(deal|offer)|flash\s+sale|doorbuster|blowout|promo\s*code|discount\s*code|coupon\s*code|use\s+code)/i);
+    if (promoMatch) return { match: true, reason: `Promo language: ${promoMatch[0]}` };
 
     for (const phrase of spamConfig.bodyPhrases) {
         if (snippet.toLowerCase().includes(phrase.toLowerCase())) {
@@ -289,6 +307,63 @@ app.post('/api/scan', async (req, res) => {
     }
 });
 
+// ============ EMAIL PARSING FUNCTIONS ============
+
+/**
+ * Extract readable text from email parts (handles multipart MIME)
+ */
+function extractTextFromParts(parts) {
+    let text = '';
+    if (!parts) return text;
+
+    for (const part of parts) {
+        if (part.parts) {
+            text += extractTextFromParts(part.parts);
+        }
+        if (part.mimeType === 'text/plain' && part.body && part.body.data) {
+            const decoded = Buffer.from(part.body.data, 'base64').toString('utf8');
+            text += decoded + '\n';
+        } else if (part.mimeType === 'text/html' && part.body && part.body.data && !text) {
+            const decoded = Buffer.from(part.body.data, 'base64').toString('utf8');
+            const stripped = decoded
+                .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+                .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+                .replace(/<[^>]+>/g, ' ')
+                .replace(/&nbsp;/g, ' ')
+                .replace(/&amp;/g, '&')
+                .replace(/\s+/g, ' ')
+                .trim();
+            text += stripped + '\n';
+        }
+    }
+    return text;
+}
+
+/**
+ * Get readable email body from a Gmail message payload
+ */
+function getReadableBody(payload) {
+    if (payload.body && payload.body.data) {
+        const decoded = Buffer.from(payload.body.data, 'base64').toString('utf8');
+        if (payload.mimeType === 'text/plain') {
+            return decoded;
+        } else if (payload.mimeType === 'text/html') {
+            return decoded
+                .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+                .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+                .replace(/<[^>]+>/g, ' ')
+                .replace(/&nbsp;/g, ' ')
+                .replace(/&amp;/g, '&')
+                .replace(/\s+/g, ' ')
+                .trim();
+        }
+    }
+    if (payload.parts) {
+        return extractTextFromParts(payload.parts);
+    }
+    return '(Could not extract email body)';
+}
+
 // Forward emails
 app.post('/api/forward', async (req, res) => {
     const { userEmail, emailIds } = req.body;
@@ -312,30 +387,22 @@ app.post('/api/forward', async (req, res) => {
 
         for (const emailId of emailIds) {
             try {
-                // Get the email
+                // Get the email in FULL format to properly parse content
                 const message = await gmail.users.messages.get({
                     userId: 'me',
                     id: emailId,
-                    format: 'raw'
+                    format: 'full'
                 });
 
-                // Get metadata
-                const metaMsg = await gmail.users.messages.get({
-                    userId: 'me',
-                    id: emailId,
-                    format: 'metadata',
-                    metadataHeaders: ['Subject', 'From', 'Date']
-                });
-
-                const headers = metaMsg.data.payload.headers;
+                const headers = message.data.payload.headers;
                 const subject = headers.find(h => h.name === 'Subject')?.value || '(No Subject)';
                 const from = headers.find(h => h.name === 'From')?.value || '';
                 const date = headers.find(h => h.name === 'Date')?.value || '';
 
-                // Decode email
-                const rawEmail = Buffer.from(message.data.raw, 'base64').toString('utf8');
+                // Extract readable text (NOT raw MIME data)
+                const readableBody = getReadableBody(message.data.payload);
 
-                // Create forward message
+                // Create forward message with READABLE content
                 const forwardBody = [
                     `---------- Forwarded Spam Email ----------`,
                     `From: ${from}`,
@@ -343,7 +410,7 @@ app.post('/api/forward', async (req, res) => {
                     `Subject: ${subject}`,
                     ``,
                     `--- Original Content ---`,
-                    rawEmail.substring(0, 30000)
+                    readableBody.substring(0, 30000)
                 ].join('\n');
 
                 const emailLines = [

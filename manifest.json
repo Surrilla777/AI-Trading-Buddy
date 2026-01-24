@@ -1,7 +1,7 @@
 {
-  "name": "AI Trading Buddy",
-  "short_name": "TradeBuddy",
-  "description": "Your AI-powered trading companion with real-time alerts and Voice of Logic",
+  "name": "Zenith",
+  "short_name": "Zenith",
+  "description": "Your AI-powered trading companion with real-time alerts and coaching",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#1a1a2e",

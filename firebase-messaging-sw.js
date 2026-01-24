@@ -4,7 +4,7 @@
 importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js');
 
-// Firebase config - AI Trading Buddy
+// Firebase config - Zenith
 const firebaseConfig = {
     apiKey: "AIzaSyAgfBV-YPkq7lJSEECw2b8zowCIKhuTGf8",
     authDomain: "ai-trading-buddy-dc686.firebaseapp.com",
@@ -120,7 +120,7 @@ self.addEventListener('pushsubscriptionchange', (event) => {
 });
 
 // Cache static assets for offline support
-const CACHE_NAME = 'trading-buddy-v1';
+const CACHE_NAME = 'zenith-v1';
 const urlsToCache = [
     '/',
     '/index.html',

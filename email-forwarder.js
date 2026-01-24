@@ -20,11 +20,39 @@ const CREDENTIALS_PATH = path.join(__dirname, 'gmail-credentials.json');
 const RESULTS_PATH = path.join(__dirname, 'scan-results.json');
 const TRACKER_PATH = path.join(__dirname, 'email-tracker.json');
 const SENT_LOG_PATH = path.join(__dirname, 'sent-emails.log');
+const PERMANENT_HISTORY_PATH = path.join(__dirname, 'sent-history-permanent.json'); // NEVER gets reset
+
+// ============ PERMANENT HISTORY (prevents duplicates forever) ============
+
+function loadPermanentHistory() {
+    if (fs.existsSync(PERMANENT_HISTORY_PATH)) {
+        return JSON.parse(fs.readFileSync(PERMANENT_HISTORY_PATH, 'utf8'));
+    }
+    return { sentIds: [], count: 0 };
+}
+
+function savePermanentHistory(history) {
+    fs.writeFileSync(PERMANENT_HISTORY_PATH, JSON.stringify(history, null, 2));
+}
+
+function isAlreadySentPermanent(emailId) {
+    const history = loadPermanentHistory();
+    return history.sentIds.includes(emailId);
+}
+
+function markSentPermanent(emailId) {
+    const history = loadPermanentHistory();
+    if (!history.sentIds.includes(emailId)) {
+        history.sentIds.push(emailId);
+        history.count = history.sentIds.length;
+        savePermanentHistory(history);
+    }
+}
 
 // Config
-const FORWARD_TO = 'spamclaims@pacifictrialattorneys.com';
-const BATCH_SIZE = 20; // Send only 20 per run to avoid spam filters
-const AUTO_DELETE_SENT = true; // Toggle: true = delete from Sent folder after sending, false = keep in Sent
+const FORWARD_TO = 'surrilla777@gmail.com'; // TESTING
+const BATCH_SIZE = 1; // TESTING: Set to 1 for single email test
+const AUTO_DELETE_SENT = false; // Toggle: true = delete from Sent folder after sending, false = keep in Sent
 const SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly',
     'https://www.googleapis.com/auth/gmail.send',
@@ -232,32 +260,247 @@ function getNewToken(oAuth2Client) {
     });
 }
 
+// ============ EMAIL PARSING FUNCTIONS ============
+
+/**
+ * Strip HTML and return clean plain text
+ */
+function stripHtml(html) {
+    return html
+        // Remove style tags and content
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+        // Remove script tags and content
+        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+        // Remove HTML comments including IE conditionals
+        .replace(/<!--[\s\S]*?-->/g, '')
+        // Replace br and p tags with newlines
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/p>/gi, '\n')
+        .replace(/<\/div>/gi, '\n')
+        .replace(/<\/tr>/gi, '\n')
+        .replace(/<\/li>/gi, '\n')
+        // Remove all other HTML tags
+        .replace(/<[^>]+>/g, '')
+        // Decode common HTML entities
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&rsquo;/g, "'")
+        .replace(/&lsquo;/g, "'")
+        .replace(/&rdquo;/g, '"')
+        .replace(/&ldquo;/g, '"')
+        .replace(/&ndash;/g, '-')
+        .replace(/&mdash;/g, '-')
+        // Remove zero-width and invisible characters
+        .replace(/&zwnj;/g, '')
+        .replace(/&zwj;/g, '')
+        .replace(/&#8199;/g, '')
+        .replace(/&#8203;/g, '')
+        .replace(/&#65279;/g, '')
+        .replace(/[\u200B-\u200D\uFEFF]/g, '')
+        // Remove all remaining HTML entities
+        .replace(/&#?\w+;/g, '')
+        // Remove standalone URLs on their own lines
+        .replace(/^\s*https?:\/\/[^\s]+\s*$/gm, '')
+        // Clean up whitespace
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
+        .replace(/^\s+|\s+$/gm, '')
+        .trim();
+}
+
+/**
+ * Check if content is actually HTML (regardless of MIME type)
+ */
+function isHtml(content) {
+    const trimmed = content.trim().toLowerCase();
+    return trimmed.startsWith('<!doctype') ||
+           trimmed.startsWith('<html') ||
+           trimmed.startsWith('<head') ||
+           trimmed.startsWith('<body') ||
+           (content.includes('<div') && content.includes('</div>')) ||
+           (content.includes('<table') && content.includes('</table>'));
+}
+
+/**
+ * Recursively find all body data in email parts
+ */
+function findAllBodies(part, results = { plain: [], html: [] }) {
+    if (!part) return results;
+
+    // Check this part's body
+    if (part.body && part.body.data) {
+        const decoded = Buffer.from(part.body.data, 'base64').toString('utf8');
+
+        // Check ACTUAL content, not just MIME type (some senders lie!)
+        if (isHtml(decoded)) {
+            results.html.push(decoded);
+        } else if (part.mimeType === 'text/plain') {
+            results.plain.push(decoded);
+        } else if (part.mimeType === 'text/html') {
+            results.html.push(decoded);
+        } else {
+            // Unknown type - check if it looks like HTML
+            if (decoded.includes('<') && decoded.includes('>')) {
+                results.html.push(decoded);
+            } else {
+                results.plain.push(decoded);
+            }
+        }
+    }
+
+    // Recurse into nested parts
+    if (part.parts && Array.isArray(part.parts)) {
+        for (const subpart of part.parts) {
+            findAllBodies(subpart, results);
+        }
+    }
+
+    return results;
+}
+
+/**
+ * Clean any text content (remove junk even from "plain text")
+ */
+function cleanText(text) {
+    return text
+        // Remove HTML entities that snuck into plain text
+        .replace(/&zwnj;/gi, '')
+        .replace(/&zwj;/gi, '')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&#8199;/g, '')
+        .replace(/&#8203;/g, '')
+        .replace(/&#65279;/g, '')
+        .replace(/&#\d+;/g, '')
+        .replace(/&\w+;/g, '')
+        // Remove zero-width characters
+        .replace(/[\u200B-\u200D\uFEFF\u00AD]/g, '')
+        // Remove standalone URLs on their own lines
+        .replace(/^\s*https?:\/\/[^\s]+\s*$/gm, '')
+        // Clean up excessive whitespace
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
+        .replace(/^\s+|\s+$/gm, '')
+        .trim();
+}
+
+/**
+ * Get readable email body from a Gmail message
+ */
+function getReadableBody(payload) {
+    // Find all plain text and HTML bodies
+    const bodies = findAllBodies(payload);
+
+    // Prefer actual plain text (not mislabeled HTML) - but still clean it
+    if (bodies.plain.length > 0) {
+        return cleanText(bodies.plain.join('\n'));
+    }
+
+    // Strip HTML from all HTML content
+    if (bodies.html.length > 0) {
+        return stripHtml(bodies.html.join('\n'));
+    }
+
+    // Last resort: check if body is directly on payload
+    if (payload.body && payload.body.data) {
+        const decoded = Buffer.from(payload.body.data, 'base64').toString('utf8');
+        if (isHtml(decoded)) {
+            return stripHtml(decoded);
+        }
+        return cleanText(decoded);
+    }
+
+    return '(Could not extract email body)';
+}
+
+/**
+ * Encode subject line for email headers (handles emojis/unicode)
+ */
+function encodeSubject(subject) {
+    // Check if subject has non-ASCII characters
+    if (/[^\x00-\x7F]/.test(subject)) {
+        // Use MIME encoded-word format (RFC 2047)
+        const encoded = Buffer.from(subject, 'utf8').toString('base64');
+        return `=?UTF-8?B?${encoded}?=`;
+    }
+    return subject;
+}
+
+/**
+ * Get HTML body from email (for forwarding with images)
+ */
+function getHtmlBody(payload) {
+    // Find HTML part
+    function findHtml(part) {
+        if (!part) return null;
+        if (part.mimeType === 'text/html' && part.body && part.body.data) {
+            return Buffer.from(part.body.data, 'base64').toString('utf8');
+        }
+        if (part.parts) {
+            for (const p of part.parts) {
+                const html = findHtml(p);
+                if (html) return html;
+            }
+        }
+        return null;
+    }
+    return findHtml(payload);
+}
+
 // ============ FORWARD FUNCTION ============
 
 async function forwardEmail(gmail, email) {
+    // Get email in FULL format to properly parse content
     const message = await gmail.users.messages.get({
         userId: 'me',
         id: email.id,
-        format: 'raw'
+        format: 'full'
     });
 
-    const rawEmail = Buffer.from(message.data.raw, 'base64').toString('utf8');
+    // Try to get HTML body (preserves images)
+    const htmlBody = getHtmlBody(message.data.payload);
 
-    const forwardBody = [
-        `---------- Forwarded Spam Email ----------`,
-        `From: ${email.from}`,
-        `Date: ${email.date}`,
-        `Subject: ${email.subject}`,
-        `Flags: ${email.flags.join(', ')}`,
-        ``,
-        `--- Original Email Content ---`,
-        rawEmail.substring(0, 50000)
-    ].join('\n');
+    // Build forwarded email
+    let forwardBody, contentType;
+
+    if (htmlBody) {
+        // Send as HTML to preserve images
+        contentType = 'text/html; charset=utf-8';
+        forwardBody = `
+<div style="font-family: Arial, sans-serif; padding: 20px; border-bottom: 2px solid #ccc; margin-bottom: 20px; background: #f9f9f9;">
+    <h3 style="color: #d9534f; margin: 0 0 10px 0;">---------- Forwarded Spam Email ----------</h3>
+    <p style="margin: 5px 0;"><strong>From:</strong> ${email.from.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>
+    <p style="margin: 5px 0;"><strong>Date:</strong> ${email.date}</p>
+    <p style="margin: 5px 0;"><strong>Subject:</strong> ${email.subject.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>
+    <p style="margin: 5px 0;"><strong>Flags:</strong> <span style="color: #d9534f;">${email.flags.join(', ')}</span></p>
+    <hr style="margin: 15px 0;">
+    <p style="margin: 0;"><strong>--- Original Email Content Below ---</strong></p>
+</div>
+${htmlBody}
+`;
+    } else {
+        // Fallback to plain text
+        contentType = 'text/plain; charset=utf-8';
+        const readableBody = getReadableBody(message.data.payload);
+        forwardBody = [
+            `---------- Forwarded Spam Email ----------`,
+            `From: ${email.from}`,
+            `Date: ${email.date}`,
+            `Subject: ${email.subject}`,
+            `Flags: ${email.flags.join(', ')}`,
+            ``,
+            `--- Original Email Content ---`,
+            readableBody.substring(0, 50000)
+        ].join('\n');
+    }
 
     const emailContent = [
         `To: ${FORWARD_TO}`,
-        `Subject: FWD: ${email.subject}`,
-        `Content-Type: text/plain; charset=utf-8`,
+        `Subject: ${encodeSubject('FWD: ' + email.subject)}`,
+        `Content-Type: ${contentType}`,
         ``,
         forwardBody
     ].join('\r\n');
@@ -367,6 +610,13 @@ async function main() {
         for (let i = 0; i < emailsToSend.length; i++) {
             const email = emailsToSend[i];
 
+            // CHECK PERMANENT HISTORY - never send same email twice!
+            if (isAlreadySentPermanent(email.id)) {
+                console.log(`[${i + 1}/${emailsToSend.length}] ${email.subject.substring(0, 45).padEnd(45)}... ⏭️ SKIPPED (already sent before)`);
+                markAsSent(tracker, email.id); // Mark in session tracker too
+                continue;
+            }
+
             process.stdout.write(`[${i + 1}/${emailsToSend.length}] ${email.subject.substring(0, 45).padEnd(45)}...`);
 
             try {
@@ -374,6 +624,7 @@ async function main() {
                 console.log(' ✓ SENT');
 
                 markAsSent(tracker, email.id);
+                markSentPermanent(email.id); // Add to PERMANENT history
                 logSentEmail(email, 'SENT');
                 sentThisSession++;
 

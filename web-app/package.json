@@ -1,15 +1,40 @@
 {
-  "name": "spam-scanner-app",
+  "name": "spam-scanner",
   "version": "1.0.0",
-  "description": "Web app to scan Gmail for spam and forward to attorneys",
-  "main": "server.js",
+  "description": "Desktop app to scan Gmail for spam and forward to attorneys",
+  "author": "Spam Scanner",
+  "main": "electron-main.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "electron": "electron .",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win"
   },
   "dependencies": {
+    "dotenv": "^16.4.5",
     "express": "^4.18.2",
-    "googleapis": "^144.0.0",
-    "dotenv": "^16.4.5"
+    "googleapis": "^144.0.0"
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.spamscanner.app",
+    "productName": "Spam Scanner",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*",
+      "!dist/**",
+      "!*.md",
+      "!*.bat"
+    ],
+    "win": {
+      "target": "dir",
+      "signAndEditExecutable": false
+    },
+    "forceCodeSigning": false
   }
 }

@@ -68,27 +68,37 @@ function isSuspiciousSender(fromHeader) {
     return false;
 }
 
-// Check if subject has FREE, $, or % patterns
+// Check if subject has DISCOUNT/PROMOTIONAL OFFERS
 function hasSpammySubject(subject, patterns) {
     if (!subject) return { match: false };
 
     const subjectLower = subject.toLowerCase();
 
-    // Check for dollar amounts like "$50", "save $20", "$100 off"
-    const dollarMatch = subject.match(/\$\d+/);
-    if (dollarMatch) {
-        return { match: true, reason: `Dollar amount: ${dollarMatch[0]}` };
+    // Check for DOLLAR DISCOUNT OFFERS like "$50 off", "save $20", "$100 discount"
+    // NOT just any dollar amount (that catches Robinhood trades)
+    const dollarDiscountMatch = subject.match(/(\$\d+\s*(off|discount|savings?))|((save|get)\s*\$\d+)/i);
+    if (dollarDiscountMatch) {
+        return { match: true, reason: `Dollar discount: ${dollarDiscountMatch[0]}` };
     }
 
-    // Check for percentage like "50%", "20% off", "save 30%"
-    const percentMatch = subject.match(/\d+\s*%/);
-    if (percentMatch) {
-        return { match: true, reason: `Percentage: ${percentMatch[0]}` };
+    // Check for PERCENTAGE DISCOUNT OFFERS like "50% off", "20% discount", "save 30%"
+    // NOT just any percentage
+    const percentDiscountMatch = subject.match(/\d+\s*%\s*(off|discount|savings?)|(save\s*\d+\s*%)/i);
+    if (percentDiscountMatch) {
+        return { match: true, reason: `Percent discount: ${percentDiscountMatch[0]}` };
     }
 
-    // Check for FREE (case insensitive but often ALL CAPS in spam)
-    if (/\bfree\b/i.test(subject)) {
-        return { match: true, reason: 'Contains "FREE"' };
+    // Check for FREE OFFERS - things being offered for free (not "freedom", "freelance", etc.)
+    const freeOfferMatch = subject.match(/\bfree\s+(shipping|gift|trial|sample|delivery|bonus|access|download|ebook|guide|consultation)|get\s+\w+\s+free\b|buy\s+\w+\s+get\s+\w+\s+free\b|\bfree\b[^a-z].*\boffer\b/i);
+    if (freeOfferMatch) {
+        return { match: true, reason: `Free offer: ${freeOfferMatch[0]}` };
+    }
+
+    // Check for PROMOTIONAL SPAM WORDS
+    const promoWords = /(clearance|marked\s*down|on\s+sale|limited\s+time|act\s+now|hurry|expires?\s+(soon|today|tonight)|last\s+chance|don'?t\s+miss|exclusive\s+(deal|offer)|flash\s+sale|doorbuster|blowout|promo\s*code|discount\s*code|coupon\s*code|use\s+code)/i;
+    const promoMatch = subject.match(promoWords);
+    if (promoMatch) {
+        return { match: true, reason: `Promo language: ${promoMatch[0]}` };
     }
 
     // Check other patterns from config
@@ -101,22 +111,36 @@ function hasSpammySubject(subject, patterns) {
     return { match: false };
 }
 
-// Check if body has discount/free language
+// Check if body has DISCOUNT/PROMOTIONAL OFFERS (not just any $ or %)
 function hasSpammyBody(snippet, bodyPhrases) {
     if (!snippet) return { match: false };
 
     const snippetLower = snippet.toLowerCase();
 
-    // Check for dollar amounts
-    const dollarMatch = snippet.match(/\$\d+/);
-    if (dollarMatch) {
-        return { match: true, reason: `Dollar amount in body: ${dollarMatch[0]}` };
+    // Check for DOLLAR DISCOUNT OFFERS like "$50 off", "save $20"
+    // NOT just any dollar amount
+    const dollarDiscountMatch = snippet.match(/(\$\d+\s*(off|discount|savings?))|((save|get)\s*\$\d+)/i);
+    if (dollarDiscountMatch) {
+        return { match: true, reason: `Dollar discount: ${dollarDiscountMatch[0]}` };
     }
 
-    // Check for percentages
-    const percentMatch = snippet.match(/\d+\s*%\s*(off|discount|savings?)/i);
-    if (percentMatch) {
-        return { match: true, reason: `Discount in body: ${percentMatch[0]}` };
+    // Check for PERCENTAGE DISCOUNT OFFERS
+    const percentDiscountMatch = snippet.match(/\d+\s*%\s*(off|discount|savings?)|(save\s*\d+\s*%)/i);
+    if (percentDiscountMatch) {
+        return { match: true, reason: `Percent discount: ${percentDiscountMatch[0]}` };
+    }
+
+    // Check for FREE OFFERS
+    const freeOfferMatch = snippet.match(/\bfree\s+(shipping|gift|trial|sample|delivery|bonus|access|download)|get\s+\w+\s+free|\bfree\b.*\boffer\b/i);
+    if (freeOfferMatch) {
+        return { match: true, reason: `Free offer: ${freeOfferMatch[0]}` };
+    }
+
+    // Check for PROMOTIONAL SPAM WORDS
+    const promoWords = /(clearance|marked\s*down|on\s+sale|limited\s+time|act\s+now|hurry|expires?\s+(soon|today|tonight)|last\s+chance|don'?t\s+miss|exclusive\s+(deal|offer)|flash\s+sale|doorbuster|blowout|promo\s*code|discount\s*code|coupon\s*code|use\s+code)/i;
+    const promoMatch = snippet.match(promoWords);
+    if (promoMatch) {
+        return { match: true, reason: `Promo language: ${promoMatch[0]}` };
     }
 
     // Check phrases from config
@@ -200,23 +224,28 @@ async function scanEmails(auth, config) {
 
     console.log(`\nScanning emails from the last ${config.daysToScan} days...\n`);
 
-    // Build search queries for different spam indicators
+    // Build search queries for PROMOTIONAL SPAM (not transactional emails)
     const searchQueries = [
-        // FREE in subject
-        `subject:free after:${afterDate}`,
-        `subject:FREE after:${afterDate}`,
-        // Dollar amounts
-        `subject:"$" after:${afterDate}`,
-        // Percentage offers
-        `subject:"% off" after:${afterDate}`,
-        `subject:"% discount" after:${afterDate}`,
-        // Common spam phrases
+        // DISCOUNT OFFERS
+        `"% off" after:${afterDate}`,
+        `"$ off" after:${afterDate}`,
+        `"percent off" after:${afterDate}`,
+        `"discount" after:${afterDate}`,
+        `"save $" after:${afterDate}`,
+        // FREE OFFERS
+        `"free shipping" after:${afterDate}`,
+        `"free gift" after:${afterDate}`,
+        `"free trial" after:${afterDate}`,
+        // PROMO/SALE LANGUAGE
+        `"promo code" after:${afterDate}`,
+        `"coupon code" after:${afterDate}`,
+        `"use code" after:${afterDate}`,
+        `"clearance" after:${afterDate}`,
         `"limited time" after:${afterDate}`,
         `"act now" after:${afterDate}`,
-        `"special offer" after:${afterDate}`,
-        `"exclusive deal" after:${afterDate}`,
-        `"discount code" after:${afterDate}`,
-        `"promo code" after:${afterDate}`,
+        `"flash sale" after:${afterDate}`,
+        `"on sale" after:${afterDate}`,
+        `"marked down" after:${afterDate}`,
     ];
 
     let processedCount = 0;
