@@ -6582,6 +6582,9 @@
 
             // Scalper state
             const [scalpTicker, setScalpTicker] = React.useState('SPY');
+            const scalpTickerRef = React.useRef('SPY'); // Ref to avoid stale closures
+            const scalpInputRef = React.useRef(null); // Direct ref to input element
+            const currentChartTickerRef = React.useRef('SPY'); // Tracks what ticker is currently displayed
             const [scalpTimeframe, setScalpTimeframe] = React.useState('5m');
             const [scalpData, setScalpData] = React.useState(null);
             const [scalpSignals, setScalpSignals] = React.useState([]);
@@ -6589,6 +6592,24 @@
             const [scalpLoading, setScalpLoading] = React.useState(false);
             const [scalpAlertsEnabled, setScalpAlertsEnabled] = React.useState(true);
             const [sessionMarkersEnabled, setSessionMarkersEnabled] = React.useState(true);
+            // Confluence Scalper Pro v8 – Balanced Nuclear (1-3 signals per session)
+            // Level breakout/rejection is the PRIMARY trigger. No level event = no signal.
+            const [useRealTime, setUseRealTime] = React.useState(false);
+            const [minConfluence, setMinConfluence] = React.useState(5);
+            const [showConfluenceTable, setShowConfluenceTable] = React.useState(true);
+            const [showOverlays, setShowOverlays] = React.useState(true);
+            const [confluenceStatus, setConfluenceStatus] = React.useState(null);
+            const [showConfluenceSettings, setShowConfluenceSettings] = React.useState(false);
+            const [minBarsBetween, setMinBarsBetween] = React.useState(10);
+            const minBarsBetweenRef = React.useRef(10);
+            const useRealTimeRef = React.useRef(false);
+            const minConfluenceRef = React.useRef(5);
+            const scalpEma9LineRef = React.useRef(null);
+            const scalpEma21LineRef = React.useRef(null);
+            const scalpEma50LineRef = React.useRef(null);
+            const scalpBbUpperRef = React.useRef(null);
+            const scalpBbLowerRef = React.useRef(null);
+            const scalpBbBasisRef = React.useRef(null);
             const [alertWatchlist, setAlertWatchlist] = React.useState(() => {
                 const saved = localStorage.getItem('scalpAlertWatchlist');
                 return saved ? JSON.parse(saved) : [];
@@ -6596,6 +6617,10 @@
             const [watchlistInput, setWatchlistInput] = React.useState('');
             const watchlistSignalsRef = React.useRef({}); // Track last signals per ticker
             const [marketCloseTime, setMarketCloseTime] = React.useState('');
+            // LIVE MODE state
+            const [liveTime, setLiveTime] = React.useState(new Date());
+            const [signalLog, setSignalLog] = React.useState([]);
+            const signalLogRef = React.useRef([]);
             const [momentumStocks, setMomentumStocks] = React.useState([]);
             const [momentumLoading, setMomentumLoading] = React.useState(false);
             const [gapperStocks, setGapperStocks] = React.useState([]);
@@ -7152,40 +7177,21 @@
             };
 
             // Detect scalp signals - MAJOR swing point reversals matching IMG_2066 pattern
+            // REAL-TIME SWING DETECTOR - Left side only, no lookahead delay
             const detectScalpSignals = (candles, vwap, ema9, ema21, ema50, rsi, macdData, levels, timeframe = '5m') => {
+                // PURE v7: Swing detection with lookahead. No extra filters.
+                // + TIMING VERIFICATION: logs candle time vs generation time for each signal
                 const signals = [];
                 const avgVolumes = [];
+                const genTime = Date.now();
 
-                // TIMEFRAME-SPECIFIC SETTINGS
-                // 1m: faster signals, tighter thresholds
-                // 5m: balanced (current working settings)
-                // 15m: slower signals, looser thresholds
                 const settings = {
-                    '1m': {
-                        swingLookback: 6,      // 6 min lookback
-                        cooldown: 6,           // 6 min between signals
-                        swingDepth: 0.004,     // 0.4% min swing depth
-                        volumeMult: 1.2,       // 1.2x volume spike
-                        zonePct: 0.50          // 50% zone threshold
-                    },
-                    '5m': {
-                        swingLookback: 12,     // 60 min lookback (12 * 5min)
-                        cooldown: 12,          // 60 min between signals
-                        swingDepth: 0.008,     // 0.8% min swing depth
-                        volumeMult: 1.3,       // 1.3x volume spike
-                        zonePct: 0.55          // 55% zone threshold
-                    },
-                    '15m': {
-                        swingLookback: 8,      // 2 hour lookback (8 * 15min)
-                        cooldown: 8,           // 2 hour between signals
-                        swingDepth: 0.012,     // 1.2% min swing depth
-                        volumeMult: 1.5,       // 1.5x volume spike
-                        zonePct: 0.60          // 60% zone threshold
-                    }
+                    '1m': { swingLookback: 6, cooldown: 6, swingDepth: 0.004, volumeMult: 1.2, zonePct: 0.50 },
+                    '5m': { swingLookback: 12, cooldown: 12, swingDepth: 0.008, volumeMult: 1.3, zonePct: 0.55 },
+                    '15m': { swingLookback: 8, cooldown: 8, swingDepth: 0.012, volumeMult: 1.5, zonePct: 0.60 }
                 };
                 const cfg = settings[timeframe] || settings['5m'];
 
-                // Pre-calculate 20-bar average volumes
                 for (let i = 0; i < candles.length; i++) {
                     if (i < 20) {
                         avgVolumes.push(candles.slice(0, i + 1).reduce((s, c) => s + c.volume, 0) / (i + 1));
@@ -7194,7 +7200,6 @@
                     }
                 }
 
-                // Helper: Check wick patterns
                 const hasBottomWick = (c) => {
                     const body = Math.abs(c.close - c.open);
                     const lowerWick = Math.min(c.open, c.close) - c.low;
@@ -7205,85 +7210,64 @@
                     const upperWick = c.high - Math.max(c.open, c.close);
                     return upperWick > body * 0.4;
                 };
-
-                // Helper: Check if price is near a key level
                 const nearLevel = (price, level, tolerance = 0.003) => {
                     if (!level) return false;
                     return Math.abs(price - level) / level < tolerance;
                 };
 
-                // Track last signal indices and prices for cooldown and level filtering
                 let lastLongIdx = -cfg.cooldown * 2;
                 let lastShortIdx = -cfg.cooldown * 2;
-                let lastShortHigh = 0; // Track highest short level
-
-                // Dynamic lookback for major swings based on timeframe
+                let lastShortHigh = 0;
                 const lookback = cfg.swingLookback;
-                for (let i = lookback + 8; i < candles.length - lookback; i++) {
+
+                for (let i = lookback + 8; i < candles.length; i++) {
                     const c = candles[i];
                     const prev = candles[i - 1];
-
-                    // Check for volume spike (timeframe-adjusted)
                     const hasVolume = c.volume > avgVolumes[i] * cfg.volumeMult;
 
-                    // TRUE swing detection with lookahead (timeframe-adjusted)
+                    // Swing detection: left always, right when available (real-time for recent bars)
                     const leftBars = candles.slice(i - lookback, i);
-                    const rightBars = candles.slice(i + 1, i + lookback + 1);
-
+                    const rightBars = candles.slice(i + 1, Math.min(i + lookback + 1, candles.length));
                     const leftMaxHigh = Math.max(...leftBars.map(x => x.high));
-                    const rightMaxHigh = Math.max(...rightBars.map(x => x.high));
                     const leftMinLow = Math.min(...leftBars.map(x => x.low));
-                    const rightMinLow = Math.min(...rightBars.map(x => x.low));
 
-                    // TRUE swing high/low: must be highest/lowest in lookback window
-                    const isSwingHigh = c.high >= leftMaxHigh && c.high >= rightMaxHigh;
-                    const isSwingLow = c.low <= leftMinLow && c.low <= rightMinLow;
+                    // Right side: use if available, otherwise left-only (real-time mode)
+                    const hasRightBars = rightBars.length > 0;
+                    const rightMaxHigh = hasRightBars ? Math.max(...rightBars.map(x => x.high)) : -Infinity;
+                    const rightMinLow = hasRightBars ? Math.min(...rightBars.map(x => x.low)) : Infinity;
 
-                    // Calculate INTRADAY range (today only) for scalping zone filters
+                    const isSwingHigh = c.high >= leftMaxHigh && (hasRightBars ? c.high >= rightMaxHigh : true);
+                    const isSwingLow = c.low <= leftMinLow && (hasRightBars ? c.low <= rightMinLow : true);
+
+                    // Intraday zone
                     const candleDate = new Date(c.time * 1000).toDateString();
                     const todayCandles = candles.filter(x => new Date(x.time * 1000).toDateString() === candleDate);
                     const intradayHigh = Math.max(...todayCandles.map(x => x.high));
                     const intradayLow = Math.min(...todayCandles.map(x => x.low));
                     const intradayRange = intradayHigh - intradayLow;
-
-                    // Zone filters based on TODAY's range (timeframe-adjusted)
                     const pricePosition = intradayRange > 0 ? (c.close - intradayLow) / intradayRange : 0.5;
-                    const atTopZone = pricePosition > cfg.zonePct;
-                    const atBottomZone = pricePosition < (1 - cfg.zonePct);
 
-                    // Candle patterns
                     const isGreen = c.close > c.open;
                     const isRed = c.close < c.open;
-
-                    // Key level checks (for adding context to swing signals)
                     const atPDL = nearLevel(c.low, levels.PDL);
                     const atPMH = nearLevel(c.high, levels.PMH);
 
                     // ==========================================
-                    // LONG SIGNAL: At TRUE swing lows in BOTTOM ZONE with reversal confirmation
+                    // LONG: swing low + pattern + cooldown + (depth OR support)
                     // ==========================================
                     const longCooldownOk = (i - lastLongIdx) >= cfg.cooldown;
-
-                    // Check next candle for confirmation (if available)
                     const nextCandle = candles[i + 1];
                     const nextIsGreen = nextCandle && nextCandle.close > nextCandle.open;
-
-                    // Accept: green candle at swing low, OR red with next green (confirmation), OR strong hammer wick
                     const strongHammer = hasBottomWick(c) && (c.low <= leftMinLow * 1.001);
                     const longPattern = isGreen || nextIsGreen || strongHammer;
 
-                    // TRUE swing lows need EITHER: significant depth OR at key support level
-                    // Calculate swing depth (how far price dropped from recent high)
                     const recentHigh = Math.max(...candles.slice(Math.max(0, i - 20), i).map(x => x.high));
                     const swingDepth = (recentHigh - c.low) / recentHigh;
-                    const isSignificantDepth = swingDepth > cfg.swingDepth; // Timeframe-adjusted depth
-
-                    // Check if at key SUPPORT level (PDL, PDH, or PML as support) - tight tolerance
+                    const isSignificantDepth = swingDepth > cfg.swingDepth;
                     const atSupportLevel = nearLevel(c.low, levels.PDL, 0.0015) ||
                                            nearLevel(c.low, levels.PDH, 0.0015) ||
                                            nearLevel(c.low, levels.PML, 0.0015);
 
-                    // Swing low with reversal pattern AND (significant depth OR at support) = long signal
                     if (isSwingLow && longPattern && longCooldownOk && (isSignificantDepth || atSupportLevel)) {
                         const reasons = ['SwingLow'];
                         if (atPDL) reasons.push('PDL');
@@ -7291,58 +7275,305 @@
                         if (hasVolume) reasons.push('Vol');
                         if (nextIsGreen && !isGreen) reasons.push('NextGreen');
 
+                        // Timing: is this the last candle in the scannable range?
+                        const fullRight = rightBars.length >= lookback;
+                        const mode = fullRight ? 'LA' : 'RT';
+                        const candleTimeMs = c.time * 1000;
+                        const delayMs = genTime - candleTimeMs;
+
                         signals.push({
-                            type: 'long',
-                            time: c.time,
-                            price: c.close,
-                            low: c.low,
-                            reasons: reasons,
-                            strength: reasons.length
+                            type: 'long', time: c.time, price: c.close, low: c.low,
+                            reasons, strength: reasons.length, mode, delayMs, candleTimeMs, genTime
                         });
                         lastLongIdx = i;
+                        console.log(`SIGNAL TIMING CHECK: long @ ${c.close.toFixed(2)} | Candle time: ${new Date(candleTimeMs).toISOString()} | Generated at: ${new Date(genTime).toISOString()} | Delay: ${delayMs}ms | Mode: ${mode} | ${reasons.join(',')}`);
                     }
 
                     // ==========================================
-                    // SHORT SIGNAL: At TRUE swing highs with rejection (TOP ZONE)
+                    // SHORT: swing high + pattern + cooldown + topZone + (height OR resistance)
                     // ==========================================
                     const shortCooldownOk = (i - lastShortIdx) >= cfg.cooldown;
-
-                    // Accept red candle OR green candle with significant top wick (rejection)
                     const hasRejectionWick = hasTopWick(c);
                     const shortPattern = isRed || hasRejectionWick;
-
-                    // Require swing high to be in TOP ZONE (timeframe-adjusted)
                     const inTopZone = pricePosition > cfg.zonePct;
 
-                    // Calculate swing height (how far price rose from recent low)
                     const recentLow = Math.min(...candles.slice(Math.max(0, i - 20), i).map(x => x.low));
                     const swingHeight = (c.high - recentLow) / recentLow;
-                    const isSignificantHeight = swingHeight > cfg.swingDepth; // Timeframe-adjusted
-
-                    // Check if at key RESISTANCE level (PDH, PMH) - tight tolerance
+                    const isSignificantHeight = swingHeight > cfg.swingDepth;
                     const atResistanceLevel = nearLevel(c.high, levels.PDH, 0.0015) ||
                                               nearLevel(c.high, levels.PMH, 0.0015);
 
-                    // Swing high with rejection pattern AND (significant height OR at resistance) = short signal
                     if (isSwingHigh && shortPattern && shortCooldownOk && inTopZone && (isSignificantHeight || atResistanceLevel)) {
                         const reasons = ['SwingHigh'];
                         if (atPMH) reasons.push('PMH');
                         if (hasTopWick(c)) reasons.push('Wick');
                         if (hasVolume) reasons.push('Vol');
 
+                        const fullRight = rightBars.length >= lookback;
+                        const mode = fullRight ? 'LA' : 'RT';
+                        const candleTimeMs = c.time * 1000;
+                        const delayMs = genTime - candleTimeMs;
+
                         signals.push({
-                            type: 'short',
-                            time: c.time,
-                            price: c.close,
-                            high: c.high,
-                            reasons: reasons,
-                            strength: reasons.length
+                            type: 'short', time: c.time, price: c.close, high: c.high,
+                            reasons, strength: reasons.length, mode, delayMs, candleTimeMs, genTime
                         });
                         lastShortIdx = i;
-                        lastShortHigh = c.high; // Track this high for next comparison
+                        lastShortHigh = c.high;
+                        console.log(`SIGNAL TIMING CHECK: short @ ${c.close.toFixed(2)} | Candle time: ${new Date(candleTimeMs).toISOString()} | Generated at: ${new Date(genTime).toISOString()} | Delay: ${delayMs}ms | Mode: ${mode} | ${reasons.join(',')}`);
                     }
                 }
+
+                console.log(`[v7+timing] Total: ${signals.length} (${signals.filter(s=>s.type==='long').length} buys, ${signals.filter(s=>s.type==='short').length} sells)`);
                 return signals;
+            };
+
+            // CONFLUENCE SCALPER PRO v7 – NUCLEAR STRICT
+            // Level breakout/rejection is the PRIMARY trigger. No level event = no signal.
+            // Hard gates ALWAYS on: volSpike + ADX>25 + MTF. Stacked EMAs mandatory.
+            // All conditions EVENT-based. 30-bar cooldown. minConf=7. Debug logging.
+            const detectConfluenceSignals = (candles, vwap, ema9, ema21, ema50, rsi, macdData, levels, timeframe = '5m', rtMode = false, minConf = 5, cooldown = 10) => {
+                // v13: SCORE-ONLY approach. No hard AND-gates except level + cooldown.
+                // Every condition contributes to score. Score >= threshold = signal.
+                // This avoids the v7-v12 trap of one missing gate killing everything.
+                if (candles.length < 50) return { signals: [], lastBarStatus: null };
+
+                const signals = [];
+                let lastSignalBar = -500;
+                const maxScore = 8;
+
+                const calcBB = (idx, len = 20, mult = 2) => {
+                    if (idx < len) return { upper: null, lower: null, basis: null };
+                    const slice = candles.slice(idx - len + 1, idx + 1).map(c => c.close);
+                    const basis = slice.reduce((a, b) => a + b, 0) / len;
+                    const std = Math.sqrt(slice.reduce((sum, val) => sum + Math.pow(val - basis, 2), 0) / len);
+                    return { upper: basis + mult * std, lower: basis - mult * std, basis };
+                };
+
+                const calcATR = (idx, len = 14) => {
+                    if (idx < len + 1) return null;
+                    let sum = 0;
+                    for (let j = idx - len; j < idx; j++) {
+                        const h = candles[j].high, l = candles[j].low;
+                        const pc = candles[j - 1]?.close || candles[j].open;
+                        sum += Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
+                    }
+                    return sum / len;
+                };
+
+                const calcADX = (idx, len = 14) => {
+                    if (idx < len * 2) return 0;
+                    let plusDM = 0, minusDM = 0, tr = 0;
+                    for (let j = idx - len; j < idx; j++) {
+                        const h = candles[j].high, l = candles[j].low;
+                        const ph = candles[j - 1]?.high || h, pl = candles[j - 1]?.low || l;
+                        const pc = candles[j - 1]?.close || candles[j].open;
+                        const up = h - ph, down = pl - l;
+                        if (up > down && up > 0) plusDM += up;
+                        if (down > up && down > 0) minusDM += down;
+                        tr += Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
+                    }
+                    if (tr === 0) return 0;
+                    const pDI = (plusDM / tr) * 100, mDI = (minusDM / tr) * 100;
+                    return Math.abs(pDI - mDI) / (pDI + mDI + 0.001) * 100;
+                };
+
+                const getHTF = (idx) => {
+                    const htfLen = timeframe === '1m' ? 15 : timeframe === '5m' ? 15 : 8;
+                    if (idx < htfLen + 1) return { bullish: false, bearish: false };
+                    const htfCandles = candles.slice(idx - htfLen - 1, idx - 1);
+                    if (htfCandles.length < 2) return { bullish: false, bearish: false };
+                    const htfCloses = htfCandles.map(c => c.close);
+                    const htfEma = htfCloses.reduce((a, b) => a + b, 0) / htfCloses.length;
+                    const htfClose = htfCandles[htfCandles.length - 1].close;
+                    const firstHalf = htfCandles.slice(0, Math.floor(htfCandles.length / 2));
+                    const secondHalf = htfCandles.slice(Math.floor(htfCandles.length / 2));
+                    const firstAvg = firstHalf.reduce((s, c) => s + c.close, 0) / firstHalf.length;
+                    const secondAvg = secondHalf.reduce((s, c) => s + c.close, 0) / secondHalf.length;
+                    return {
+                        bullish: htfClose > htfEma && secondAvg > firstAvg,
+                        bearish: htfClose < htfEma && secondAvg < firstAvg
+                    };
+                };
+
+                let prevBullCondition = false;
+                let prevBearCondition = false;
+                let lastBarStatus = null;
+
+                const hasLevels = levels && (levels.PDH || levels.PDL || levels.PMH || levels.PML);
+                console.log(`[v13] Levels: PDH=${levels?.PDH?.toFixed(2)||'-'} PDL=${levels?.PDL?.toFixed(2)||'-'} PMH=${levels?.PMH?.toFixed(2)||'-'} PML=${levels?.PML?.toFixed(2)||'-'} | minConf=${minConf} cooldown=${cooldown}`);
+
+                const scanStart = 50;
+                for (let i = scanStart; i < candles.length; i++) {
+                    const c = candles[i];
+                    const isLastCandle = (i === candles.length - 1);
+                    const prev = candles[i - 1];
+                    if (!prev) continue;
+
+                    const currRsi = rsi[i];
+                    const currHist = macdData.histogram[i];
+                    const currEma9 = ema9[i];
+                    const currEma21 = ema21[i];
+                    const currEma50 = ema50[i];
+                    const bb = calcBB(i);
+                    const atr = calcATR(i);
+                    const adx = calcADX(i);
+                    const htf = getHTF(i);
+                    const price = c.close;
+                    const prevPrice = prev.close;
+
+                    if (!currRsi || currHist == null || !currEma9 || !bb.basis || !atr) {
+                        prevBullCondition = false;
+                        prevBearCondition = false;
+                        continue;
+                    }
+
+                    const vol20 = candles.slice(Math.max(0, i - 20), i).reduce((s, x) => s + x.volume, 0) / Math.min(20, i);
+                    const volRatio = c.volume / vol20;
+
+                    // ================================================================
+                    // LEVEL – only hard gate. Simple state: above resistance or below support
+                    // ================================================================
+                    let bullLevel = false, bearLevel = false, levelCrossed = 'none';
+                    if (hasLevels) {
+                        if (levels.PDH && price > levels.PDH) { bullLevel = true; levelCrossed = 'above PDH'; }
+                        else if (levels.PMH && price > levels.PMH) { bullLevel = true; levelCrossed = 'above PMH'; }
+                        else if (levels.PDL && c.low <= levels.PDL * 1.003 && price > levels.PDL) { bullLevel = true; levelCrossed = 'PDL bounce'; }
+                        else if (levels.PML && c.low <= levels.PML * 1.003 && price > levels.PML) { bullLevel = true; levelCrossed = 'PML bounce'; }
+
+                        if (levels.PDL && price < levels.PDL) { bearLevel = true; levelCrossed = 'below PDL'; }
+                        else if (levels.PML && price < levels.PML) { bearLevel = true; levelCrossed = 'below PML'; }
+                        else if (levels.PDH && c.high >= levels.PDH * 0.998 && price < levels.PDH) { bearLevel = true; levelCrossed = 'PDH reject'; }
+                        else if (levels.PMH && c.high >= levels.PMH * 0.998 && price < levels.PMH) { bearLevel = true; levelCrossed = 'PMH reject'; }
+                    } else {
+                        bullLevel = true; bearLevel = true; levelCrossed = 'no levels';
+                    }
+
+                    // ================================================================
+                    // SCORE: 8 factors, ALL contribute, NONE required individually
+                    // ================================================================
+                    const bullStacked = currEma9 > currEma21 && currEma21 > currEma50;
+                    const bearStacked = currEma9 < currEma21 && currEma21 < currEma50;
+
+                    const bull_ema = currEma9 > currEma21;
+                    const bull_stacked = bullStacked;
+                    const bull_macd = currHist > 0;
+                    const bull_rsi = currRsi > 50 && currRsi < 80;
+                    const bull_bb = price < bb.basis;
+                    const bull_vol = volRatio > 1.2;
+                    const bull_adx = adx > 20;
+                    const bull_mtf = htf.bullish;
+
+                    const bear_ema = currEma9 < currEma21;
+                    const bear_stacked = bearStacked;
+                    const bear_macd = currHist < 0;
+                    const bear_rsi = currRsi > 20 && currRsi < 50;
+                    const bear_bb = price > bb.basis;
+                    const bear_vol = volRatio > 1.2;
+                    const bear_adx = adx > 20;
+                    const bear_mtf = htf.bearish;
+
+                    let bullScore = 0; const bullR = [];
+                    if (bull_ema) { bullScore++; bullR.push('EMA'); }
+                    if (bull_stacked) { bullScore++; bullR.push('Stack'); }
+                    if (bull_macd) { bullScore++; bullR.push('MACD'); }
+                    if (bull_rsi) { bullScore++; bullR.push('RSI'); }
+                    if (bull_bb) { bullScore++; bullR.push('BB'); }
+                    if (bull_vol) { bullScore++; bullR.push('Vol'); }
+                    if (bull_adx) { bullScore++; bullR.push('ADX'); }
+                    if (bull_mtf) { bullScore++; bullR.push('MTF'); }
+
+                    let bearScore = 0; const bearR = [];
+                    if (bear_ema) { bearScore++; bearR.push('EMA'); }
+                    if (bear_stacked) { bearScore++; bearR.push('Stack'); }
+                    if (bear_macd) { bearScore++; bearR.push('MACD'); }
+                    if (bear_rsi) { bearScore++; bearR.push('RSI'); }
+                    if (bear_bb) { bearScore++; bearR.push('BB'); }
+                    if (bear_vol) { bearScore++; bearR.push('Vol'); }
+                    if (bear_adx) { bearScore++; bearR.push('ADX'); }
+                    if (bear_mtf) { bearScore++; bearR.push('MTF'); }
+
+                    // ================================================================
+                    // SIGNAL: level + score >= minConf + dominant + edge + cooldown
+                    // That's it. No vol/ADX/stacked/MTF hard gates.
+                    // ================================================================
+                    const bullCondition = bullLevel && bullScore >= minConf && bullScore > bearScore;
+                    const bearCondition = bearLevel && bearScore >= minConf && bearScore > bullScore;
+
+                    const newBull = bullCondition && !prevBullCondition;
+                    const newBear = bearCondition && !prevBearCondition;
+                    const fireBull = rtMode ? newBull : (newBull && !isLastCandle);
+                    const fireBear = rtMode ? newBear : (newBear && !isLastCandle);
+                    const cooldownOk = (i - lastSignalBar) >= cooldown;
+                    const ts = new Date(c.time * 1000).toLocaleTimeString();
+
+                    // Debug on level bars
+                    if (bullLevel || bearLevel) {
+                        const dir = bullLevel ? 'BULL' : 'BEAR';
+                        const score = bullLevel ? bullScore : bearScore;
+                        const other = bullLevel ? bearScore : bullScore;
+                        const reasons = bullLevel ? bullR : bearR;
+                        const cond = bullLevel ? bullCondition : bearCondition;
+                        const isNew = bullLevel ? newBull : newBear;
+                        const fire = bullLevel ? fireBull : fireBear;
+                        const fails = [];
+                        if (score < minConf) fails.push(`score ${score}<${minConf}`);
+                        if (score <= other) fails.push(`not dominant ${score}vs${other}`);
+                        if (cond && !isNew) fails.push('not edge');
+                        if (fire && !cooldownOk) fails.push(`cooldown ${i-lastSignalBar}/${cooldown}`);
+                        if (isNew && isLastCandle && !rtMode) fails.push('last candle');
+
+                        if (fails.length > 0) {
+                            console.log(`[v13 BLOCKED] ${dir} @ ${price.toFixed(2)} | ${ts} | Lvl: ${levelCrossed} | ${score}/8 [${reasons.join(',')}] | FAIL: ${fails.join(', ')} | vol:${volRatio.toFixed(1)}x adx:${adx.toFixed(1)} rsi:${currRsi?.toFixed(0)} hist:${currHist?.toFixed(3)}`);
+                        }
+                        // Also log bear side if both triggered
+                        if (bullLevel && bearLevel) {
+                            const bFails = [];
+                            if (bearScore < minConf) bFails.push(`score ${bearScore}<${minConf}`);
+                            if (bearScore <= bullScore) bFails.push(`not dominant ${bearScore}vs${bullScore}`);
+                            if (bearCondition && !newBear) bFails.push('not edge');
+                            if (bFails.length > 0) {
+                                console.log(`[v13 BLOCKED] BEAR @ ${price.toFixed(2)} | ${ts} | Lvl: ${levelCrossed} | ${bearScore}/8 [${bearR.join(',')}] | FAIL: ${bFails.join(', ')}`);
+                            }
+                        }
+                    }
+
+                    if (fireBull && cooldownOk) {
+                        console.log(`[v13 SIGNAL] BUY @ ${price.toFixed(2)} | ${ts} | ${bullScore}/8 [${bullR.join(',')}] | Lvl: ${levelCrossed} | vol:${volRatio.toFixed(1)}x adx:${adx.toFixed(1)} rsi:${currRsi?.toFixed(0)} | SL:${(price-1.5*atr).toFixed(2)}`);
+                        signals.push({
+                            type: 'long', time: c.time, price, low: c.low,
+                            stopLoss: price - 1.5 * atr,
+                            reasons: bullR, strength: bullScore, maxStrength: maxScore,
+                            levelTrigger: levelCrossed, instant: true, isNew: isLastCandle
+                        });
+                        lastSignalBar = i;
+                    }
+                    if (fireBear && cooldownOk) {
+                        console.log(`[v13 SIGNAL] SELL @ ${price.toFixed(2)} | ${ts} | ${bearScore}/8 [${bearR.join(',')}] | Lvl: ${levelCrossed} | vol:${volRatio.toFixed(1)}x adx:${adx.toFixed(1)} rsi:${currRsi?.toFixed(0)} | SL:${(price+1.5*atr).toFixed(2)}`);
+                        signals.push({
+                            type: 'short', time: c.time, price, high: c.high,
+                            stopLoss: price + 1.5 * atr,
+                            reasons: bearR, strength: bearScore, maxStrength: maxScore,
+                            levelTrigger: levelCrossed, instant: true, isNew: isLastCandle
+                        });
+                        lastSignalBar = i;
+                    }
+
+                    prevBullCondition = bullCondition;
+                    prevBearCondition = bearCondition;
+
+                    if (isLastCandle) {
+                        lastBarStatus = {
+                            bull: { ema: bull_ema, stacked: bull_stacked, macd: bull_macd, rsi: bull_rsi, bb: bull_bb, volume: bull_vol, adx: bull_adx, mtf: bull_mtf, level: bullLevel, gate: bull_vol && bull_adx },
+                            bear: { ema: bear_ema, stacked: bear_stacked, macd: bear_macd, rsi: bear_rsi, bb: bear_bb, volume: bear_vol, adx: bear_adx, mtf: bear_mtf, level: bearLevel, gate: bear_vol && bear_adx },
+                            bullScore, bearScore, maxScore,
+                            levelCrossed, adxValue: adx, volSpike: bull_vol, hasLevels
+                        };
+                    }
+                }
+
+                console.log(`[v13] Total signals: ${signals.length}`);
+                return { signals, lastBarStatus };
             };
 
             // Backtest scalp signals
@@ -7402,6 +7633,7 @@
 
             // Fetch scalp data and analyze
             const fetchScalpData = async (ticker = scalpTicker, isRefresh = false, timeframe = null) => {
+                console.log('[Scalper] fetchScalpData called:', ticker, 'isRefresh:', isRefresh);
                 // Use passed timeframe or fall back to state (timeframe param avoids stale closure)
                 const tf = timeframe || scalpTimeframe;
 
@@ -7476,25 +7708,55 @@
                     const macdData = calcMACD(closes);
                     const levels = calcKeyLevels(candles);
 
-                    // Detect signals
-                    const rawSignals = detectScalpSignals(candles, vwap, ema9, ema21, ema50, rsi, macdData, levels, tf);
+                    // v14 HYBRID: Swing detection drives arrows, confluence is table-only
+                    // 1) Swing signals = chart arrows (v7 restored with lookahead)
+                    const swingSignals = detectScalpSignals(candles, vwap, ema9, ema21, ema50, rsi, macdData, levels, tf);
+                    console.log('[v14] Swing signals (arrows):', swingSignals.length);
 
-                    // Backtest
-                    const backtest = backtestScalpSignals(rawSignals, candles);
+                    // 2) Confluence = status table only (no arrows)
+                    let confStatus = null;
+                    try {
+                        const confResult = detectConfluenceSignals(
+                            candles, vwap, ema9, ema21, ema50, rsi, macdData, levels, tf,
+                            useRealTimeRef.current, minConfluenceRef.current,
+                            minBarsBetweenRef.current
+                        );
+                        confStatus = confResult.lastBarStatus;
+                        console.log('[v14] Confluence table status updated');
+                    } catch (e) {
+                        console.error('[v14] Confluence table error:', e);
+                    }
 
-                    // Set state (use original ticker for display, not Yahoo format)
-                    setScalpData({
-                        candles,
-                        vwap,
-                        ema9,
-                        ema21,
-                        ema50,
-                        levels,
-                        ticker: ticker.toUpperCase() // Original user input
+                    // Arrows come from swing detection ONLY
+                    const allSignals = swingSignals;
+
+                    // Calculate BB arrays for chart overlay
+                    const bbData = candles.map((c, idx) => {
+                        if (idx < 20) return { upper: null, lower: null, basis: null };
+                        const slice = candles.slice(idx - 20, idx).map(x => x.close);
+                        const basis = slice.reduce((a, b) => a + b, 0) / 20;
+                        const std = Math.sqrt(slice.reduce((sum, val) => sum + Math.pow(val - basis, 2), 0) / 20);
+                        return { upper: basis + 2 * std, lower: basis - 2 * std, basis };
                     });
-                    setScalpSignals(backtest.signals);
-                    setScalpStats(backtest.stats);
+
+                    // Set state
+                    setScalpData({
+                        candles, vwap, ema9, ema21, ema50, levels, bbData,
+                        ticker: ticker.toUpperCase()
+                    });
+                    setScalpSignals(allSignals);
+                    setScalpStats({ total: allSignals.length, realtime: useRealTimeRef.current });
+                    setConfluenceStatus(confStatus);
                     setLastRefresh(new Date());
+                    // Update signal log with last 5 signals (most recent first)
+                    const logEntries = allSignals.slice(-5).reverse().map(s => ({
+                        type: s.type, price: s.price, mode: s.mode,
+                        candleTime: new Date(s.candleTimeMs).toLocaleTimeString('en-US', {hour12:false}),
+                        detectionTime: new Date(s.genTime).toLocaleTimeString('en-US', {hour12:false, fractionalSecondDigits:3}),
+                        delayMs: s.delayMs
+                    }));
+                    signalLogRef.current = logEntries;
+                    setSignalLog(logEntries);
 
                 } catch (err) {
                     console.error('Scalp fetch error:', err);
@@ -7724,9 +7986,10 @@
 
                 scalpRefreshRef.current = setInterval(() => {
                     // Check if chart exists (means we have data loaded)
-                    if (scalpChartInstanceRef.current) {
-                        console.log('[Scalper] Auto-refreshing chart...');
-                        fetchScalpData(scalpTicker, true, scalpTimeframe);
+                    if (scalpChartInstanceRef.current && currentChartTickerRef.current) {
+                        // Use ref to get current ticker (avoids stale closure)
+                        console.log('[Scalper] Auto-refreshing chart for:', currentChartTickerRef.current);
+                        fetchScalpData(currentChartTickerRef.current, true, scalpTimeframe);
                     }
                 }, 10000);
 
@@ -7738,7 +8001,19 @@
                 };
             }, [activeEdgeView, scalpTicker, scalpTimeframe]); // Added scalpTimeframe
 
-            // Reset chart when ticker OR timeframe changes (so we get fresh chart)
+            // LIVE MODE clock - updates every second
+            React.useEffect(() => {
+                if (activeEdgeView !== 'scalper') return;
+                const id = setInterval(() => setLiveTime(new Date()), 1000);
+                return () => clearInterval(id);
+            }, [activeEdgeView]);
+
+            // Sync confluence refs to avoid stale closures in auto-refresh
+            React.useEffect(() => { useRealTimeRef.current = useRealTime; }, [useRealTime]);
+            React.useEffect(() => { minConfluenceRef.current = minConfluence; }, [minConfluence]);
+            React.useEffect(() => { minBarsBetweenRef.current = minBarsBetween; }, [minBarsBetween]);
+
+            // Reset chart when timeframe changes (so we get fresh chart)
             React.useEffect(() => {
                 if (scalpChartInstanceRef.current) {
                     scalpChartInstanceRef.current.remove();
@@ -7750,11 +8025,10 @@
                     scalpPmlLineRef.current = null;
                     scalpIsFirstRender.current = true;
                 }
-                // Auto-fetch when timeframe changes (if we have a ticker)
-                if (scalpTicker) {
-                    fetchScalpData(scalpTicker, false, scalpTimeframe);
-                }
-            }, [scalpTicker, scalpTimeframe]);
+                // Auto-fetch when timeframe changes - use ref to get current ticker
+                const ticker = currentChartTickerRef.current || 'SPY';
+                fetchScalpData(ticker, false, scalpTimeframe);
+            }, [scalpTimeframe]); // Only react to timeframe changes
 
             // Alert when new scalp signals are detected
             React.useEffect(() => {
@@ -7773,7 +8047,9 @@
                 if (recentNewSignals.length > 0 && lastSignals.length > 0) {
                     recentNewSignals.forEach(sig => {
                         const signalType = sig.type === 'long' ? '🟢 BUY' : '🔴 SELL';
-                        const message = `${signalType} SIGNAL: ${scalpTicker} @ $${sig.price.toFixed(2)}`;
+                        const slText = sig.stopLoss ? ` | SL: $${sig.stopLoss.toFixed(2)}` : '';
+                        const confText = sig.maxStrength ? ` | Conf: ${sig.strength}/${sig.maxStrength}` : '';
+                        const message = `${signalType} SIGNAL: ${scalpTicker} @ $${sig.price.toFixed(2)}${confText}${slText}`;
 
                         // Play sound
                         try {
@@ -7790,8 +8066,8 @@
                                 : 'bg-red-900/90 border-red-500 text-red-100'
                         }`;
                         toast.innerHTML = `
-                            <div class="font-bold text-lg">${signalType} SIGNAL</div>
-                            <div class="text-sm">${scalpTicker} @ $${sig.price.toFixed(2)}</div>
+                            <div class="font-bold text-lg">${signalType} SIGNAL ${sig.maxStrength ? '<span class="text-sm opacity-75">' + sig.strength + '/' + sig.maxStrength + '</span>' : ''}</div>
+                            <div class="text-sm">${scalpTicker} @ $${sig.price.toFixed(2)}${sig.stopLoss ? ' <span class="opacity-75">SL: $' + sig.stopLoss.toFixed(2) + '</span>' : ''}</div>
                             <div class="text-xs opacity-75 mt-1">${sig.reasons.join(' + ')}</div>
                         `;
                         document.body.appendChild(toast);
@@ -8109,7 +8385,7 @@
                     isNewChart = true;
                     scalpIsFirstRender.current = true;
                     chart = LightweightCharts.createChart(scalpChartRef.current, {
-                        width: scalpChartRef.current.clientWidth,
+                        autoSize: true,
                         height: 500,
                         layout: {
                             background: { type: 'solid', color: '#1a1a2e' },
@@ -8182,6 +8458,34 @@
                         title: 'PML'
                     });
 
+                    // EMA overlay lines
+                    scalpEma9LineRef.current = chart.addLineSeries({
+                        color: '#3b82f6', lineWidth: 1, priceLineVisible: false,
+                        lastValueVisible: false, title: 'EMA9'
+                    });
+                    scalpEma21LineRef.current = chart.addLineSeries({
+                        color: '#f97316', lineWidth: 1, priceLineVisible: false,
+                        lastValueVisible: false, title: 'EMA21'
+                    });
+                    scalpEma50LineRef.current = chart.addLineSeries({
+                        color: 'rgba(255,255,255,0.5)', lineWidth: 2, priceLineVisible: false,
+                        lastValueVisible: false, title: 'EMA50'
+                    });
+
+                    // Bollinger Band overlay lines
+                    scalpBbUpperRef.current = chart.addLineSeries({
+                        color: 'rgba(156,163,175,0.4)', lineWidth: 1, lineStyle: 2,
+                        priceLineVisible: false, lastValueVisible: false
+                    });
+                    scalpBbLowerRef.current = chart.addLineSeries({
+                        color: 'rgba(156,163,175,0.4)', lineWidth: 1, lineStyle: 2,
+                        priceLineVisible: false, lastValueVisible: false
+                    });
+                    scalpBbBasisRef.current = chart.addLineSeries({
+                        color: 'rgba(156,163,175,0.2)', lineWidth: 1, lineStyle: 1,
+                        priceLineVisible: false, lastValueVisible: false
+                    });
+
                     // Handle resize
                     const handleResize = () => {
                         if (scalpChartRef.current && chart) {
@@ -8209,13 +8513,37 @@
                 }
 
 
-                // Update signal markers
+                // Update EMA/BB overlays
+                if (showOverlays && scalpData.ema9) {
+                    const times = scalpData.candles.map(c => c.time);
+                    const mapLine = (arr) => arr.map((v, i) => v ? { time: times[i], value: v } : null).filter(Boolean);
+                    scalpEma9LineRef.current?.setData(mapLine(scalpData.ema9));
+                    scalpEma21LineRef.current?.setData(mapLine(scalpData.ema21));
+                    scalpEma50LineRef.current?.setData(mapLine(scalpData.ema50));
+                } else {
+                    scalpEma9LineRef.current?.setData([]);
+                    scalpEma21LineRef.current?.setData([]);
+                    scalpEma50LineRef.current?.setData([]);
+                }
+                if (showOverlays && scalpData.bbData) {
+                    const times = scalpData.candles.map(c => c.time);
+                    const mapBB = (key) => scalpData.bbData.map((b, i) => b[key] ? { time: times[i], value: b[key] } : null).filter(Boolean);
+                    scalpBbUpperRef.current?.setData(mapBB('upper'));
+                    scalpBbLowerRef.current?.setData(mapBB('lower'));
+                    scalpBbBasisRef.current?.setData(mapBB('basis'));
+                } else {
+                    scalpBbUpperRef.current?.setData([]);
+                    scalpBbLowerRef.current?.setData([]);
+                    scalpBbBasisRef.current?.setData([]);
+                }
+
+                // Update signal markers (score labels off by default for clean chart)
                 const markers = scalpSignals.map(sig => ({
                     time: sig.time,
                     position: sig.type === 'long' ? 'belowBar' : 'aboveBar',
                     color: sig.type === 'long' ? '#22c55e' : '#ef4444',
                     shape: sig.type === 'long' ? 'arrowUp' : 'arrowDown',
-                    text: '',
+                    text: sig.mode || 'LA',
                     size: 1,
                 }));
                 candleSeries.setMarkers(markers);
@@ -8281,7 +8609,7 @@
                     chart.timeScale().fitContent();
                     scalpIsFirstRender.current = false;
                 }
-            }, [scalpData, scalpSignals, sessionMarkersEnabled]);
+            }, [scalpData, scalpSignals, sessionMarkersEnabled, showOverlays]);
 
             return (
                 <div className="space-y-4">
@@ -9442,18 +9770,21 @@
                             <div className="flex items-center justify-between gap-2">
                                 <div>
                                     <span className="text-sm font-semibold">⚡ Scalp Scanner</span>
-                                    <p className="text-xs text-gray-500">5-Min Confluence • 11 Indicators</p>
+                                    <p className="text-xs text-gray-500">Confluence Scalper Pro • 8 Factors</p>
                                 </div>
                                 <div className="flex gap-2 items-center flex-wrap">
-                                    <input
-                                        type="text"
-                                        value={scalpTicker}
-                                        onChange={(e) => setScalpTicker(e.target.value.toUpperCase())}
-                                        onKeyDown={(e) => e.key === 'Enter' && fetchScalpData(scalpTicker, false, scalpTimeframe)}
-                                        placeholder="TICKER"
-                                        maxLength={5}
-                                        className="w-20 px-2 py-1 text-sm bg-gray-800 border border-gray-600 rounded-lg text-center font-mono"
-                                    />
+                                    <div className="flex items-center gap-1">
+                                        <span className="text-xs text-yellow-400 font-semibold">CHART:</span>
+                                        <input
+                                            id="scalp-ticker-input"
+                                            type="text"
+                                            defaultValue="SPY"
+                                            style={{textTransform: 'uppercase'}}
+                                            placeholder="TICKER"
+                                            maxLength={5}
+                                            className="w-20 px-2 py-1 text-sm bg-gray-900 border-2 border-yellow-500 rounded-lg text-center font-mono font-bold text-yellow-400"
+                                        />
+                                    </div>
                                     {/* Timeframe selector */}
                                     <div className="flex bg-gray-800 rounded-lg overflow-hidden border border-gray-600">
                                         {['1m', '5m', '15m'].map(tf => (
@@ -9471,7 +9802,7 @@
                                         ))}
                                     </div>
                                     <button
-                                        onClick={() => fetchScalpData(scalpTicker, false, scalpTimeframe)}
+                                        onClick={() => { const input = document.getElementById('scalp-ticker-input'); const ticker = input?.value?.toUpperCase()?.trim() || 'SPY'; currentChartTickerRef.current = ticker; fetchScalpData(ticker, false, scalpTimeframe); }}
                                         disabled={scalpLoading}
                                         className="text-xs px-3 py-1 bg-gradient-to-r from-yellow-600 to-orange-500 hover:from-yellow-500 hover:to-orange-400 rounded-lg font-semibold"
                                     >
@@ -9499,8 +9830,133 @@
                                     >
                                         📍
                                     </button>
+                                    <button
+                                        onClick={() => setShowConfluenceSettings(!showConfluenceSettings)}
+                                        className={`text-xs px-2 py-1 rounded-lg font-semibold transition-colors ${
+                                            showConfluenceSettings
+                                                ? 'bg-yellow-600 hover:bg-yellow-500 text-white'
+                                                : 'bg-gray-700 hover:bg-gray-600 text-gray-400'
+                                        }`}
+                                        title="Confluence Settings"
+                                    >
+                                        ⚙️
+                                    </button>
                                 </div>
                             </div>
+
+                            {/* Confluence Settings Panel */}
+                            {showConfluenceSettings && (
+                                <div className="bg-gray-800/80 rounded-lg p-3 border border-yellow-600/50 space-y-3">
+                                    <div className="text-xs font-semibold text-green-400">v7 PURE + TIMING</div>
+                                    <div className="text-xs text-gray-400 space-y-1">
+                                        <div>Primary trigger: <span className="text-yellow-300">Level breakout/rejection required</span></div>
+                                        <div>8 factors: EMA Cross, Stacked EMAs, MACD Flip, RSI Cross, BB Bounce, Vol Spike, ADX &gt; 25, 15m MTF</div>
+                                    </div>
+
+                                    <div className="border-t border-gray-700 pt-2">
+                                        <div className="text-xs font-semibold text-red-400 mb-1">HARD GATES (always enforced, non-toggleable)</div>
+                                        <div className="text-xs text-gray-500">Volume Spike + ADX &gt; 25 + MTF Agreement + Stacked EMAs + Level Event</div>
+                                    </div>
+
+                                    <div className="border-t border-gray-700 pt-2 flex gap-3 items-center flex-wrap">
+                                        <label className="flex items-center gap-1 text-xs text-gray-300">
+                                            Min Score:
+                                            <select value={minConfluence} onChange={e => setMinConfluence(+e.target.value)}
+                                                className="bg-gray-900 border border-gray-600 rounded px-1 py-0.5 text-xs text-yellow-400">
+                                                {[2,3,4,5,6,7,8].map(n => <option key={n} value={n}>{n}</option>)}
+                                            </select>
+                                        </label>
+                                        <label className="flex items-center gap-1 text-xs text-gray-300">
+                                            Cooldown:
+                                            <select value={minBarsBetween} onChange={e => setMinBarsBetween(+e.target.value)}
+                                                className="bg-gray-900 border border-gray-600 rounded px-1 py-0.5 text-xs text-yellow-400">
+                                                {[15,20,25,30,40,50].map(n => <option key={n} value={n}>{n} bars</option>)}
+                                            </select>
+                                        </label>
+                                        <label className="flex items-center gap-2 text-xs">
+                                            <input type="checkbox" checked={useRealTime}
+                                                onChange={() => setUseRealTime(!useRealTime)} className="rounded" />
+                                            <span className={useRealTime ? 'text-yellow-300' : 'text-gray-500'}>Real-Time</span>
+                                        </label>
+                                    </div>
+
+                                    <div className="border-t border-gray-700 pt-2 flex gap-3 items-center flex-wrap">
+                                        <label className="flex items-center gap-2 text-xs">
+                                            <input type="checkbox" checked={showConfluenceTable}
+                                                onChange={() => setShowConfluenceTable(!showConfluenceTable)} className="rounded" />
+                                            <span className="text-gray-300">Table</span>
+                                        </label>
+                                        <label className="flex items-center gap-2 text-xs">
+                                            <input type="checkbox" checked={showOverlays}
+                                                onChange={() => setShowOverlays(!showOverlays)} className="rounded" />
+                                            <span className="text-gray-300">EMA/BB</span>
+                                        </label>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Confluence Status Table */}
+                            {showConfluenceTable && confluenceStatus && (
+                                <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-700">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <span className="text-xs font-semibold text-yellow-400">CONFLUENCE STATUS</span>
+                                        <div className="flex gap-3">
+                                            <span className={`text-xs font-mono font-bold ${confluenceStatus.bullScore >= minConfluence ? 'text-green-400' : 'text-gray-500'}`}>
+                                                BULL: {confluenceStatus.bullScore}/{confluenceStatus.maxScore}
+                                            </span>
+                                            <span className={`text-xs font-mono font-bold ${confluenceStatus.bearScore >= minConfluence ? 'text-red-400' : 'text-gray-500'}`}>
+                                                BEAR: {confluenceStatus.bearScore}/{confluenceStatus.maxScore}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <table className="w-full text-xs">
+                                        <thead>
+                                            <tr className="text-gray-500 border-b border-gray-700">
+                                                <th className="text-left py-1">Indicator</th>
+                                                <th className="text-center py-1 text-green-400">Bull</th>
+                                                <th className="text-center py-1 text-red-400">Bear</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {[
+                                                ['EMA Trend', 'ema', true],
+                                                ['Stacked EMAs', 'stacked', true],
+                                                ['MACD+Signal', 'macd', true],
+                                                ['RSI Zone', 'rsi', true],
+                                                ['BB Position', 'bb', true],
+                                                ['Vol > 1.2x', 'volume', true],
+                                                ['ADX > 15', 'adx', true],
+                                                ['15m MTF', 'mtf', true],
+                                                ['Level', 'level', true],
+                                                ['Gate', 'gate', true],
+                                            ].map(([label, key, enabled]) => (
+                                                <tr key={key} className="border-b border-gray-700/50">
+                                                    <td className={`py-1 ${enabled ? 'text-gray-300' : 'text-gray-600 line-through'}`}>{label}</td>
+                                                    <td className="text-center">
+                                                        <span className={confluenceStatus.bull[key] && enabled ? 'text-green-400' : 'text-gray-600'}>
+                                                            {confluenceStatus.bull[key] && enabled ? '✓' : '✗'}
+                                                        </span>
+                                                    </td>
+                                                    <td className="text-center">
+                                                        <span className={confluenceStatus.bear[key] && enabled ? 'text-red-400' : 'text-gray-600'}>
+                                                            {confluenceStatus.bear[key] && enabled ? '✓' : '✗'}
+                                                        </span>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                            <tr className="font-bold">
+                                                <td className="py-1 text-white">SCORE</td>
+                                                <td className={`text-center ${confluenceStatus.bullScore >= minConfluence ? 'text-green-400' : 'text-gray-500'}`}>
+                                                    {confluenceStatus.bullScore}/{confluenceStatus.maxScore}
+                                                </td>
+                                                <td className={`text-center ${confluenceStatus.bearScore >= minConfluence ? 'text-red-400' : 'text-gray-500'}`}>
+                                                    {confluenceStatus.bearScore}/{confluenceStatus.maxScore}
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
 
                             {/* Market Timer + Quick Scanners Row */}
                             <div className="grid grid-cols-3 gap-2">
@@ -9545,7 +10001,7 @@
                                 </button>
                             </div>
 
-                            {/* Alert Watchlist */}
+                            {/* Alert Watchlist - HIDDEN FOR NOW (confusing UI)
                             <div className="bg-gray-800/50 rounded-lg p-2 border border-gray-700">
                                 <div className="flex items-center justify-between mb-2">
                                     <div className="text-xs text-green-400 font-semibold">🔔 ALERT WATCHLIST</div>
@@ -9562,9 +10018,9 @@
                                                 setWatchlistInput('');
                                             }
                                         }}
-                                        placeholder="Add ticker..."
+                                        placeholder="+ add to alerts..."
                                         maxLength={5}
-                                        className="flex-1 px-2 py-1 text-xs bg-gray-900 border border-gray-600 rounded font-mono"
+                                        className="flex-1 px-2 py-1 text-xs bg-gray-900 border border-green-600/50 rounded font-mono text-green-400"
                                     />
                                     <button
                                         onClick={() => { addToWatchlist(watchlistInput); setWatchlistInput(''); }}
@@ -9606,6 +10062,7 @@
                                     Scans every 30 sec • Alerts only for watchlist tickers
                                 </div>
                             </div>
+                            */}
 
                             {/* Momentum Results */}
                             {momentumStocks.length > 0 && (
@@ -9694,6 +10151,34 @@
                                 </div>
                             )}
 
+                            {/* LIVE MODE Indicator */}
+                            {scalpData && (() => {
+                                const tfMinutes = scalpTimeframe === '1m' ? 1 : scalpTimeframe === '5m' ? 5 : 15;
+                                const now = liveTime;
+                                const etNow = new Date(now.toLocaleString('en-US', {timeZone: 'America/New_York'}));
+                                const mins = etNow.getMinutes();
+                                const secs = etNow.getSeconds();
+                                const elapsed = (mins % tfMinutes) * 60 + secs;
+                                const remaining = tfMinutes * 60 - elapsed;
+                                const remMin = Math.floor(remaining / 60);
+                                const remSec = remaining % 60;
+                                const isMarketOpen = etNow.getHours() >= 9 && (etNow.getHours() < 16 || (etNow.getHours() === 9 && etNow.getMinutes() >= 30));
+                                return (
+                                    <div className="bg-gray-800/80 rounded-xl p-2 border border-green-500/50 flex items-center justify-between text-xs">
+                                        <div className="flex items-center gap-2">
+                                            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse inline-block"></span>
+                                            <span className="text-green-400 font-bold">LIVE MODE</span>
+                                            <span className="text-gray-400">{etNow.toLocaleTimeString('en-US', {hour12:false})} ET</span>
+                                            <span className={isMarketOpen ? 'text-green-400' : 'text-red-400'}>{isMarketOpen ? 'MARKET OPEN' : 'MARKET CLOSED'}</span>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                            <span className="text-yellow-400">Next candle: {remMin}:{String(remSec).padStart(2,'0')}</span>
+                                            <span className="text-cyan-400">Watching for signals...</span>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+
                             {/* Chart Container - ALWAYS rendered to prevent DOM destruction */}
                             <div className="bg-gray-900 rounded-xl p-2 border border-gray-700">
                                 {scalpData && (
@@ -9720,37 +10205,38 @@
                                 )}
                             </div>
 
-                            {/* Signal Stats */}
+                            {/* Last 5 Signals Log */}
+                            {signalLog.length > 0 && (
+                                <div className="bg-gray-800/60 rounded-xl p-2 border border-gray-600">
+                                    <div className="text-xs text-gray-400 font-semibold mb-1">SIGNAL TIMING LOG (last 5)</div>
+                                    <div className="space-y-1 font-mono text-xs">
+                                        {signalLog.map((s, i) => (
+                                            <div key={i} className={`flex justify-between ${s.type === 'long' ? 'text-green-400' : 'text-red-400'}`}>
+                                                <span>{s.type === 'long' ? 'BUY' : 'SELL'} @ {s.price.toFixed(2)}</span>
+                                                <span className="text-gray-500">Candle: {s.candleTime}</span>
+                                                <span className="text-gray-500">Detected: {s.detectionTime}</span>
+                                                <span className={s.delayMs < 60000 ? 'text-cyan-400' : 'text-yellow-400'}>Delay: {s.delayMs}ms</span>
+                                                <span className={`px-1 rounded ${s.mode === 'RT' ? 'bg-yellow-600/30 text-yellow-400' : 'bg-gray-600/30 text-gray-400'}`}>{s.mode}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Signal Mode Indicator */}
                             {scalpStats && (
-                                <div className="bg-gray-800/50 rounded-xl p-3 border border-gray-700">
-                                    <div className="text-xs text-gray-400 mb-2 font-semibold">📊 BACKTEST RESULTS (5 days)</div>
-                                    <div className="grid grid-cols-2 gap-3">
-                                        {/* Long Stats */}
-                                        <div className="space-y-1">
-                                            <div className="text-xs text-green-400 font-semibold">🟢 LONGS ({scalpStats.longs})</div>
-                                            <div className="text-xs text-gray-400">
-                                                25min: <span className={scalpStats.long5.winRate >= 50 ? 'text-green-400' : 'text-red-400'}>{scalpStats.long5.winRate.toFixed(0)}%</span> win
-                                            </div>
-                                            <div className="text-xs text-gray-400">
-                                                50min: <span className={scalpStats.long10.winRate >= 50 ? 'text-green-400' : 'text-red-400'}>{scalpStats.long10.winRate.toFixed(0)}%</span> win
-                                            </div>
-                                            <div className="text-xs text-gray-400">
-                                                100min: <span className={scalpStats.long20.winRate >= 50 ? 'text-green-400' : 'text-red-400'}>{scalpStats.long20.winRate.toFixed(0)}%</span> win
-                                            </div>
-                                        </div>
-                                        {/* Short Stats */}
-                                        <div className="space-y-1">
-                                            <div className="text-xs text-red-400 font-semibold">🔴 SHORTS ({scalpStats.shorts})</div>
-                                            <div className="text-xs text-gray-400">
-                                                25min: <span className={scalpStats.short5.winRate >= 50 ? 'text-green-400' : 'text-red-400'}>{scalpStats.short5.winRate.toFixed(0)}%</span> win
-                                            </div>
-                                            <div className="text-xs text-gray-400">
-                                                50min: <span className={scalpStats.short10.winRate >= 50 ? 'text-green-400' : 'text-red-400'}>{scalpStats.short10.winRate.toFixed(0)}%</span> win
-                                            </div>
-                                            <div className="text-xs text-gray-400">
-                                                100min: <span className={scalpStats.short20.winRate >= 50 ? 'text-green-400' : 'text-red-400'}>{scalpStats.short20.winRate.toFixed(0)}%</span> win
-                                            </div>
-                                        </div>
+                                <div className="bg-gray-800/50 rounded-xl p-3 border border-cyan-600">
+                                    <div className="text-xs text-cyan-400 font-semibold flex items-center gap-2">
+                                        <span className="animate-pulse">⚡</span> CONFLUENCE SCALPER PRO
+                                        <span className={`px-1.5 py-0.5 rounded text-xs ${useRealTime ? 'bg-yellow-600/30 text-yellow-400' : 'bg-gray-600/30 text-gray-400'}`}>
+                                            {useRealTime ? 'REAL-TIME' : 'CONFIRMED'}
+                                        </span>
+                                    </div>
+                                    <div className="text-xs text-gray-400 mt-1">
+                                        {scalpStats.total} signals | Min: {minConfluence}/8 | Cooldown: {minBarsBetween} bars | Level-triggered
+                                    </div>
+                                    <div className="text-xs text-gray-500 mt-1">
+                                        v7 PURE + timing verification | LA=lookahead confirmed, RT=near-live candle
                                     </div>
                                 </div>
                             )}
@@ -9778,15 +10264,11 @@
                                                     </span>
                                                 </div>
                                                 <div className="text-gray-400 mt-1">
-                                                    <span className="text-yellow-400">[{sig.strength}]</span> {sig.reasons.join(' + ')}
+                                                    <span className="text-yellow-400 font-bold">[{sig.strength}/{sig.maxStrength || '?'}]</span> {sig.reasons.join(' + ')}
+                                                    {sig.stopLoss && (
+                                                        <span className="ml-2 text-gray-500">SL: ${sig.stopLoss.toFixed(2)}</span>
+                                                    )}
                                                 </div>
-                                                {sig.return10 !== null && (
-                                                    <div className="mt-1">
-                                                        <span className={sig.win10 ? 'text-green-400' : 'text-red-400'}>
-                                                            50min: {sig.return10 > 0 ? '+' : ''}{sig.return10.toFixed(2)}% {sig.win10 ? '✓' : '✗'}
-                                                        </span>
-                                                    </div>
-                                                )}
                                             </div>
                                         ))}
                                     </div>
@@ -9795,8 +10277,8 @@
 
                             {/* Info Box */}
                             <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-xl text-xs text-yellow-300">
-                                💡 <strong>Reversal Scanner:</strong> Signals ONLY fire at key levels (PDH/PDL/PMH/PML/VWAP) with rejection candle + volume.
-                                🟢 Long = Support bounce | 🔴 Short = Resistance rejection. 2-hour cooldown.
+                                💡 <strong>Confluence Scalper Pro:</strong> 8-factor scoring (EMA Cross, Trend, MACD, RSI, BB, Volume, ADX, MTF).
+                                Signals fire on edge detection (first bar condition flips). SL = 1.5x ATR. Click ⚙️ to customize.
                             </div>
                         </div>
                     )}

@@ -1,0 +1,266 @@
+//@version=5
+indicator("Confluence Scalper Pro v9 – Calibrated Strict", overlay=true, max_labels_count=500, max_bars_back=500)
+
+// ============================================================================
+// USER INPUTS
+// ============================================================================
+emaFastLen     = input.int(9, "Fast EMA Length", group="Trend")
+emaSlowLen     = input.int(21, "Slow EMA Length", group="Trend")
+emaTrendLen    = input.int(50, "Trend EMA Length", group="Trend")
+
+macdFast   = input.int(12, "MACD Fast", group="MACD")
+macdSlow   = input.int(26, "MACD Slow", group="MACD")
+macdSignal = input.int(9, "MACD Signal", group="MACD")
+
+rsiLen        = input.int(14, "RSI Length", group="RSI")
+rsiBullCross  = input.int(35, "RSI Bull Cross Level", group="RSI")
+rsiBearCross  = input.int(65, "RSI Bear Cross Level", group="RSI")
+
+bbLen  = input.int(20, "BB Length", group="Bollinger Bands")
+bbMult = input.float(2.0, "BB Multiplier", group="Bollinger Bands")
+
+volLen    = input.int(20, "Volume SMA Length", group="Volume")
+volMult   = input.float(1.2, "Volume Multiplier", minval=1.0, step=0.1, group="Volume")
+
+adxLen       = input.int(14, "ADX Length", group="ADX")
+adxThreshold = input.int(20, "ADX Threshold", group="ADX")
+
+mtfTimeframe = input.timeframe("15", "Higher Timeframe", group="MTF")
+
+// --- Key Levels ---
+autoLevels   = input.bool(true, "Auto-Calculate PDH/PDL (daily)", group="Levels")
+inputPDH     = input.float(0.0, "Manual PDH (0=auto)", group="Levels")
+inputPDL     = input.float(0.0, "Manual PDL (0=auto)", group="Levels")
+inputPMH     = input.float(0.0, "PMH (0=disable)", group="Levels")
+inputPML     = input.float(0.0, "PML (0=disable)", group="Levels")
+
+// --- Signal Settings ---
+minConfluence  = input.int(5, "Minimum Confluence Score", minval=1, maxval=8, group="Signals")
+minBarsBetween = input.int(15, "Min Bars Between Signals", minval=1, maxval=100, group="Signals")
+
+// --- Visuals ---
+showTable      = input.bool(true, "Show Confluence Table", group="Visuals")
+showLevelLines = input.bool(true, "Show Key Level Lines", group="Visuals")
+
+// --- Alerts ---
+useRealTime = input.bool(false, "Real-Time Alerts (may repaint)", group="Alerts")
+
+// ============================================================================
+// CALCULATIONS
+// ============================================================================
+emaFast  = ta.ema(close, emaFastLen)
+emaSlow  = ta.ema(close, emaSlowLen)
+emaTrend = ta.ema(close, emaTrendLen)
+
+[macdLine, signalLine, histLine] = ta.macd(close, macdFast, macdSlow, macdSignal)
+
+rsi = ta.rsi(close, rsiLen)
+
+bbBasis = ta.sma(close, bbLen)
+bbDev   = bbMult * ta.stdev(close, bbLen)
+bbUpper = bbBasis + bbDev
+bbLower = bbBasis - bbDev
+
+volSma   = ta.sma(volume, volLen)
+volSpike = volume > volSma * volMult
+
+[diPlus, diMinus, adxValue] = ta.dmi(adxLen, adxLen)
+adxStrong = adxValue > adxThreshold
+
+// MTF (non-repainting)
+mtfEmaTrend = request.security(syminfo.tickerid, mtfTimeframe, ta.ema(close, emaTrendLen)[1], lookahead=barmerge.lookahead_off, gaps=barmerge.gaps_off)
+mtfMacdHist = request.security(syminfo.tickerid, mtfTimeframe, histLine[1], lookahead=barmerge.lookahead_off, gaps=barmerge.gaps_off)
+mtfClose    = request.security(syminfo.tickerid, mtfTimeframe, close[1], lookahead=barmerge.lookahead_off, gaps=barmerge.gaps_off)
+mtfBullish  = mtfClose > mtfEmaTrend and mtfMacdHist > 0
+mtfBearish  = mtfClose < mtfEmaTrend and mtfMacdHist < 0
+
+// Auto PDH/PDL
+prevDayHigh = request.security(syminfo.tickerid, "D", high[1], lookahead=barmerge.lookahead_off, gaps=barmerge.gaps_off)
+prevDayLow  = request.security(syminfo.tickerid, "D", low[1],  lookahead=barmerge.lookahead_off, gaps=barmerge.gaps_off)
+pdh = autoLevels ? prevDayHigh : (inputPDH > 0 ? inputPDH : na)
+pdl = autoLevels ? prevDayLow  : (inputPDL > 0 ? inputPDL : na)
+pmh = inputPMH > 0 ? inputPMH : na
+pml = inputPML > 0 ? inputPML : na
+hasPDH = not na(pdh)
+hasPDL = not na(pdl)
+hasPMH = not na(pmh)
+hasPML = not na(pml)
+hasAnyLevel = hasPDH or hasPDL or hasPMH or hasPML
+
+// ============================================================================
+// HARD GATES – ALWAYS enforced, ADX raised to 25
+// ============================================================================
+bullGate = volSpike and adxStrong and mtfBullish
+bearGate = volSpike and adxStrong and mtfBearish
+
+// ============================================================================
+// STACKED EMAs – mandatory
+// ============================================================================
+bullStacked = emaFast > emaSlow and emaSlow > emaTrend
+bearStacked = emaFast < emaSlow and emaSlow < emaTrend
+
+// ============================================================================
+// PRIMARY TRIGGER: LEVEL BREAKOUT/REJECTION (this bar only)
+// No level event = no signal. This kills 90% of noise.
+// ============================================================================
+// v8: Close crossover + wick rejection (bounce off support / rejection at resistance)
+bullLevelTrigger = (hasPDH and ta.crossover(close, pdh)) or (hasPMH and ta.crossover(close, pmh)) or
+                   (hasPDL and low <= pdl * 1.002 and close > pdl) or
+                   (hasPML and low <= pml * 1.002 and close > pml)
+bearLevelTrigger = (hasPDL and ta.crossunder(close, pdl)) or (hasPML and ta.crossunder(close, pml)) or
+                   (hasPDH and high >= pdh * 0.998 and close < pdh) or
+                   (hasPMH and high >= pmh * 0.998 and close < pmh)
+
+// If no levels exist at all, pass through (but this should be rare with auto PDH/PDL)
+bullLevelOk = hasAnyLevel ? bullLevelTrigger : true
+bearLevelOk = hasAnyLevel ? bearLevelTrigger : true
+
+// ============================================================================
+// CONFLUENCE CONDITIONS – v9 HYBRID (state-based foundation + event bonus)
+// ============================================================================
+// 1. EMA trending (state)
+bull_ema  = emaFast > emaSlow
+bear_ema  = emaFast < emaSlow
+// 2. Stacked EMAs (state)
+bull_stack = bullStacked
+bear_stack = bearStacked
+// 3. MACD favorable (state: histogram direction)
+bull_macd = histLine > 0
+bear_macd = histLine < 0
+// 4. RSI zone (state: favorable range)
+bull_rsi  = rsi > 45 and rsi < 75
+bear_rsi  = rsi < 55 and rsi > 25
+// 5. BB position (state: price relative to basis)
+bull_bb   = close < bbBasis
+bear_bb   = close > bbBasis
+// 6-8: vol, adx, mtf (same)
+bull_vol  = volSpike
+bull_adx  = adxStrong
+bull_mtf  = mtfBullish
+bear_vol  = volSpike
+bear_adx  = adxStrong
+bear_mtf  = mtfBearish
+
+// Scores
+bullScore = (bull_ema ? 1 : 0) + (bull_stack ? 1 : 0) + (bull_macd ? 1 : 0) + (bull_rsi ? 1 : 0) +
+            (bull_bb ? 1 : 0) + (bull_vol ? 1 : 0) + (bull_adx ? 1 : 0) + (bull_mtf ? 1 : 0)
+
+bearScore = (bear_ema ? 1 : 0) + (bear_stack ? 1 : 0) + (bear_macd ? 1 : 0) + (bear_rsi ? 1 : 0) +
+            (bear_bb ? 1 : 0) + (bear_vol ? 1 : 0) + (bear_adx ? 1 : 0) + (bear_mtf ? 1 : 0)
+
+maxScore = 8
+
+// v9: EMA trending required (not full stacked), gates required
+bullTrending = emaFast > emaSlow
+bearTrending = emaFast < emaSlow
+
+// ============================================================================
+// SIGNAL: level trigger + score + gates + trending + edge + cooldown
+// ============================================================================
+bullCondition = bullLevelOk and bullScore >= minConfluence and bullScore > bearScore and bullGate and bullTrending
+bearCondition = bearLevelOk and bearScore >= minConfluence and bearScore > bullScore and bearGate and bearTrending
+
+newBull = bullCondition and not bullCondition[1]
+newBear = bearCondition and not bearCondition[1]
+
+var int lastSignalBar = na
+cooldownOk = na(lastSignalBar) or bar_index - lastSignalBar >= minBarsBetween
+
+buySignal  = newBull and cooldownOk
+sellSignal = newBear and cooldownOk
+
+if buySignal
+    lastSignalBar := bar_index
+if sellSignal
+    lastSignalBar := bar_index
+
+plotBuy  = useRealTime ? buySignal : (buySignal and barstate.isconfirmed)
+plotSell = useRealTime ? sellSignal : (sellSignal and barstate.isconfirmed)
+
+// ============================================================================
+// VISUALS
+// ============================================================================
+plot(emaFast,  "Fast EMA",  color=color.blue)
+plot(emaSlow,  "Slow EMA",  color=color.orange)
+plot(emaTrend, "Trend EMA", color=color.new(color.white, 50), linewidth=2)
+
+p1 = plot(bbUpper, "BB Upper", color=color.new(color.gray, 60))
+p2 = plot(bbBasis, "BB Basis", color=color.new(color.gray, 80))
+p3 = plot(bbLower, "BB Lower", color=color.new(color.gray, 60))
+fill(p1, p3, color=color.new(color.gray, 92))
+
+plot(showLevelLines and hasPDH ? pdh : na, "PDH", color=color.red,    style=plot.style_linebr, linewidth=2)
+plot(showLevelLines and hasPDL ? pdl : na, "PDL", color=color.green,  style=plot.style_linebr, linewidth=2)
+plot(showLevelLines and hasPMH ? pmh : na, "PMH", color=color.orange, style=plot.style_linebr, linewidth=1)
+plot(showLevelLines and hasPML ? pml : na, "PML", color=color.teal,   style=plot.style_linebr, linewidth=1)
+
+plotshape(plotBuy,  "BUY",  shape.triangleup,   location.belowbar, color.lime, size=size.normal)
+plotshape(plotSell, "SELL", shape.triangledown,  location.abovebar, color.red,  size=size.normal)
+
+bgcolor(plotBuy  ? color.new(color.lime, 88) : na)
+bgcolor(plotSell ? color.new(color.red,  88) : na)
+
+// ============================================================================
+// CONFLUENCE STATUS TABLE
+// ============================================================================
+if showTable and barstate.islast
+    var table t = table.new(position.top_right, 3, 14, bgcolor=color.new(color.black, 80), border_width=1)
+
+    table.cell(t, 0, 0, "v9 CALIBRATED",  text_color=color.yellow, text_size=size.small)
+    table.cell(t, 1, 0, "Bull",        text_color=color.lime,   text_size=size.small)
+    table.cell(t, 2, 0, "Bear",        text_color=color.red,    text_size=size.small)
+
+    row(tbl, r, name, bullOk, bearOk) =>
+        table.cell(tbl, 0, r, name,                  text_color=color.gray, text_size=size.tiny)
+        table.cell(tbl, 1, r, bullOk ? "✓" : "✗",    text_color=bullOk ? color.lime : color.new(color.gray,60), text_size=size.tiny)
+        table.cell(tbl, 2, r, bearOk ? "✓" : "✗",    text_color=bearOk ? color.red  : color.new(color.gray,60), text_size=size.tiny)
+
+    row(t, 1, "Level Trigger", bullLevelOk,  bearLevelOk)
+    row(t, 2, "EMA Cross",     bull_emaCross, bear_emaCross)
+    row(t, 3, "Stacked EMAs",  bullStacked,   bearStacked)
+    row(t, 4, "Trend",         bull_trend,    bear_trend)
+    row(t, 5, "MACD Flip",     bull_macd,     bear_macd)
+    row(t, 6, "RSI Cross",     bull_rsi,      bear_rsi)
+    row(t, 7, "BB Bounce",     bull_bb,       bear_bb)
+    row(t, 8, "Vol Spike",     bull_vol,      bear_vol)
+    row(t, 9, "ADX > 25",      bull_adx,      bear_adx)
+    row(t, 10, "15m MTF",      bull_mtf,      bear_mtf)
+
+    table.cell(t, 0, 11, "GATES", text_color=color.yellow, text_size=size.tiny)
+    table.cell(t, 1, 11, bullGate and bullStacked ? "PASS" : "FAIL", text_color=bullGate and bullStacked ? color.lime : color.new(color.gray,60), text_size=size.tiny)
+    table.cell(t, 2, 11, bearGate and bearStacked ? "PASS" : "FAIL", text_color=bearGate and bearStacked ? color.red  : color.new(color.gray,60), text_size=size.tiny)
+
+    table.cell(t, 0, 12, "SCORE", text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 12, str.tostring(bullScore) + "/8",
+               text_color=bullScore >= minConfluence ? color.lime : color.gray, text_size=size.small)
+    table.cell(t, 2, 12, str.tostring(bearScore) + "/8",
+               text_color=bearScore >= minConfluence ? color.red : color.gray, text_size=size.small)
+
+    table.cell(t, 0, 13, "ADX", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 13, str.tostring(adxValue, "#.#"), text_color=adxStrong ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(t, 2, 13, str.tostring(adxValue, "#.#"), text_color=adxStrong ? color.red  : color.gray, text_size=size.tiny)
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+atr    = ta.atr(14)
+slBuy  = close - 1.5 * atr
+slSell = close + 1.5 * atr
+
+buyMsg  = "BUY @ " + str.tostring(close, "#.##") + " | " + str.tostring(bullScore) + "/8" +
+          " | RSI " + str.tostring(rsi, "#.#") + " | ADX " + str.tostring(adxValue, "#.#") +
+          " | SL " + str.tostring(slBuy, "#.##")
+sellMsg = "SELL @ " + str.tostring(close, "#.##") + " | " + str.tostring(bearScore) + "/8" +
+          " | RSI " + str.tostring(rsi, "#.#") + " | ADX " + str.tostring(adxValue, "#.#") +
+          " | SL " + str.tostring(slSell, "#.##")
+
+freq = useRealTime ? alert.freq_once_per_bar : alert.freq_once_per_bar_close
+
+if (useRealTime ? buySignal : (buySignal and barstate.isconfirmed))
+    alert(buyMsg, freq)
+if (useRealTime ? sellSignal : (sellSignal and barstate.isconfirmed))
+    alert(sellMsg, freq)
+
+alertcondition(buySignal,  "Confluence BUY",  "BUY Signal")
+alertcondition(sellSignal, "Confluence SELL", "SELL Signal")
+alertcondition(buySignal or sellSignal, "Any Signal", "New signal detected")

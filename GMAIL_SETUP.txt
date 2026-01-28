@@ -1,0 +1,66 @@
+GMAIL SPAM SCANNER - SETUP INSTRUCTIONS
+========================================
+
+STEP 1: Create a Google Cloud Project
+--------------------------------------
+1. Go to: https://console.cloud.google.com/
+2. Click the project dropdown at the top
+3. Click "New Project"
+4. Name it something like "Email Scanner"
+5. Click "Create"
+
+STEP 2: Enable Gmail API
+------------------------
+1. In your new project, go to "APIs & Services" > "Library"
+2. Search for "Gmail API"
+3. Click on it and click "Enable"
+
+STEP 3: Configure OAuth Consent Screen
+--------------------------------------
+1. Go to "APIs & Services" > "OAuth consent screen"
+2. Select "External" and click "Create"
+3. Fill in:
+   - App name: "Email Scanner"
+   - User support email: (your email)
+   - Developer contact: (your email)
+4. Click "Save and Continue"
+5. On Scopes page, just click "Save and Continue"
+6. On Test Users page:
+   - Click "Add Users"
+   - Add YOUR Gmail address
+   - Click "Save and Continue"
+7. Click "Back to Dashboard"
+
+STEP 4: Create OAuth Credentials
+--------------------------------
+1. Go to "APIs & Services" > "Credentials"
+2. Click "Create Credentials" > "OAuth client ID"
+3. Application type: "Desktop app"
+4. Name: "Email Scanner"
+5. Click "Create"
+6. Click "Download JSON"
+7. Rename the downloaded file to: gmail-credentials.json
+8. Move it to this folder (same folder as email-scanner.js)
+
+STEP 5: Install Dependencies & Run
+----------------------------------
+1. Open terminal/command prompt in this folder
+2. Run: npm install
+3. Run: npm run scan   (or: node email-scanner.js)
+4. First time: It will give you a URL to open
+5. Open the URL, sign in with your Gmail
+6. Copy the authorization code
+7. Paste it back in the terminal
+8. Done! It will scan your emails.
+
+CUSTOMIZING
+-----------
+Edit spam-phrases.json to:
+- Add/remove phrases to search for
+- Change daysToScan (how far back to look)
+- Change maxResults (max emails per phrase)
+
+RUNNING AGAIN
+-------------
+Just run: npm run scan
+(No need to authorize again - token is saved)

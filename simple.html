@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Trading Buddy - Simple</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white p-8">
+    <h1 class="text-3xl font-bold mb-4">Pattern Screener</h1>
+
+    <div class="mb-4">
+        <label class="block mb-2">Select Pattern:</label>
+        <select id="pattern" class="bg-gray-800 p-2 rounded text-white">
+            <option value="ta_pattern_wedgedown">Falling Wedge</option>
+            <option value="ta_pattern_wedgeup">Rising Wedge</option>
+            <option value="ta_pattern_channelup">Channel Up</option>
+            <option value="ta_pattern_channeldown">Channel Down</option>
+            <option value="ta_pattern_doubletop">Double Top</option>
+            <option value="ta_pattern_doublebottom">Double Bottom</option>
+            <option value="ta_candlestick_h">Hammer</option>
+            <option value="ta_candlestick_d">Doji</option>
+        </select>
+        <button onclick="loadStocks()" class="ml-2 bg-blue-600 px-4 py-2 rounded">Load Stocks</button>
+    </div>
+
+    <div id="status" class="mb-4 text-yellow-400">Select a pattern and click Load</div>
+
+    <div id="stocks" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+
+    <script>
+        async function loadStocks() {
+            const pattern = document.getElementById('pattern').value;
+            const status = document.getElementById('status');
+            const stocksDiv = document.getElementById('stocks');
+
+            status.textContent = 'Loading...';
+            status.className = 'mb-4 text-yellow-400';
+            stocksDiv.innerHTML = '';
+
+            try {
+                const response = await fetch('/api/finviz?pattern=' + pattern);
+                const html = await response.text();
+
+                status.textContent = 'Got ' + html.length + ' bytes, parsing...';
+
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+
+                const links = doc.querySelectorAll('a[href*="quote.ashx?t="]');
+                const seen = new Set();
+                const stocks = [];
+
+                links.forEach(link => {
+                    const ticker = link.textContent.trim();
+                    if (ticker && /^[A-Z]{1,5}$/.test(ticker) && !seen.has(ticker) && stocks.length < 20) {
+                        seen.add(ticker);
+
+                        const row = link.closest('tr');
+                        let price = '', change = '', mcap = '';
+                        if (row) {
+                            row.querySelectorAll('td').forEach(cell => {
+                                const t = cell.textContent.trim();
+                                if (!mcap && /^\d+\.?\d*[BMK]$/.test(t)) mcap = t;
+                                if (!price && /^\d+\.\d{2}$/.test(t)) price = '$' + t;
+                                if (!change && /^-?\d+\.?\d*%$/.test(t)) change = t;
+                            });
+                        }
+
+                        stocks.push({ ticker, price, change, mcap });
+                    }
+                });
+
+                if (stocks.length > 0) {
+                    status.textContent = 'Found ' + stocks.length + ' stocks!';
+                    status.className = 'mb-4 text-green-400';
+
+                    stocks.forEach(s => {
+                        const isUp = !s.change.startsWith('-');
+                        stocksDiv.innerHTML += `
+                            <div class="bg-gray-800 p-4 rounded-lg border ${isUp ? 'border-green-500' : 'border-red-500'}">
+                                <div class="text-xl font-bold">${s.ticker}</div>
+                                <div class="text-gray-400">${s.price} | ${s.mcap}</div>
+                                <div class="${isUp ? 'text-green-400' : 'text-red-400'} text-lg">${s.change}</div>
+                                <a href="https://finviz.com/quote.ashx?t=${s.ticker}" target="_blank" class="text-blue-400 text-sm">View Chart</a>
+                            </div>
+                        `;
+                    });
+                } else {
+                    status.textContent = 'No stocks found for this pattern';
+                    status.className = 'mb-4 text-red-400';
+                }
+
+            } catch (e) {
+                status.textContent = 'Error: ' + e.message;
+                status.className = 'mb-4 text-red-400';
+            }
+        }
+
+        // Load on page load
+        loadStocks();
+    </script>
+</body>
+</html>

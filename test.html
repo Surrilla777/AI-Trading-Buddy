@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head><title>Test</title></head>
+<body style="background:#111;color:#fff;font-family:monospace;padding:20px;">
+<h1>Testing Finviz Fetch</h1>
+<div id="result">Loading...</div>
+<script>
+async function test() {
+    const result = document.getElementById('result');
+    try {
+        result.innerHTML = 'Fetching from /api/finviz?pattern=ta_pattern_wedgedown ...';
+
+        const response = await fetch('/api/finviz?pattern=ta_pattern_wedgedown');
+        result.innerHTML += '<br>Response status: ' + response.status;
+
+        const html = await response.text();
+        result.innerHTML += '<br>HTML length: ' + html.length + ' bytes';
+
+        // Parse
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+
+        // Find stock links
+        const links = doc.querySelectorAll('a[href*="quote.ashx?t="]');
+        result.innerHTML += '<br>Found ' + links.length + ' stock links';
+
+        // Extract tickers
+        const tickers = [];
+        links.forEach(link => {
+            const text = link.textContent.trim();
+            if (/^[A-Z]{1,5}$/.test(text) && !tickers.includes(text)) {
+                tickers.push(text);
+            }
+        });
+
+        result.innerHTML += '<br><br><strong>TICKERS FOUND: ' + tickers.length + '</strong>';
+        result.innerHTML += '<br>' + tickers.slice(0, 20).join(', ');
+
+        if (tickers.length > 0) {
+            result.innerHTML += '<br><br><span style="color:lime;font-size:24px">SUCCESS - DATA IS WORKING!</span>';
+        } else {
+            result.innerHTML += '<br><br><span style="color:red">NO TICKERS FOUND - Check HTML below:</span>';
+            result.innerHTML += '<br><textarea style="width:100%;height:300px;background:#222;color:#fff;">' + html.substring(0, 5000) + '</textarea>';
+        }
+
+    } catch (e) {
+        result.innerHTML = '<span style="color:red">ERROR: ' + e.message + '</span>';
+    }
+}
+test();
+</script>
+</body>
+</html>
