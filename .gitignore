@@ -43,3 +43,4 @@ npm-debug.log*
 
 # Nested duplicate folders (cleanup)
 Userssurriai-trading-buddy/
+web-app/dist/
