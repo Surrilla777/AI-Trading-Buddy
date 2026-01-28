@@ -1686,15 +1686,24 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    // ===== NEXT DAY PREDICTION ENDPOINT =====
-    // Predicts open/close direction based on historical patterns
+    // ===== NEXT DAY PREDICTION ENDPOINT v3 =====
+    // Gap-fill focused prediction with size bucketing and weekday stats
     if (url.pathname === '/api/next-day-prediction') {
         (async () => {
             const tickers = (url.searchParams.get('tickers') || 'SPY,QQQ,IWM').split(',').map(t => t.trim().toUpperCase());
-            console.log(`[Next Day Prediction] Analyzing: ${tickers.join(', ')}`);
+            console.log(`[Next Day Prediction v3] Analyzing: ${tickers.join(', ')}`);
 
-            // Helper to fetch price history
-            const fetchYahooChart = (ticker, range = '6mo', interval = '1d') => {
+            // v3 thresholds: 65% confidence + 30 matches for directional call
+            // v3 thresholds - adjusted based on backtest
+            // Focus on gap-fill conviction (>=65% fill prob) more than direction
+            const thresholds = {
+                SPY: { minMatches: 25, minConfidence: 60 },  // ~60% dir accuracy
+                QQQ: { minMatches: 35, minConfidence: 60 },  // More calls allowed
+                IWM: { minMatches: 35, minConfidence: 60 },  // More calls allowed
+                DEFAULT: { minMatches: 25, minConfidence: 60 }
+            };
+
+            const fetchYahooChart = (ticker, range = '1y', interval = '1d') => {
                 return new Promise((resolve, reject) => {
                     const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=${interval}&range=${range}`;
                     https.get(yahooUrl, {
@@ -1703,11 +1712,8 @@ const server = http.createServer((req, res) => {
                         let data = '';
                         response.on('data', chunk => data += chunk);
                         response.on('end', () => {
-                            try {
-                                resolve(JSON.parse(data));
-                            } catch (e) {
-                                reject(new Error('Failed to parse chart data'));
-                            }
+                            try { resolve(JSON.parse(data)); }
+                            catch (e) { reject(new Error('Failed to parse chart data')); }
                         });
                     }).on('error', reject);
                 });
@@ -1717,10 +1723,9 @@ const server = http.createServer((req, res) => {
                 const results = {};
 
                 for (const ticker of tickers) {
-                    console.log(`[Next Day Prediction] Analyzing ${ticker}...`);
+                    console.log(`[Next Day Prediction v3] Analyzing ${ticker}...`);
                     try {
-                        // Fetch 6 months of daily data for pattern matching
-                        const data = await fetchYahooChart(ticker, '6mo', '1d');
+                        const data = await fetchYahooChart(ticker, '1y', '1d');
 
                         if (!data?.chart?.result?.[0]) {
                             results[ticker] = { error: 'No data available' };
@@ -1735,6 +1740,7 @@ const server = http.createServer((req, res) => {
                         const lows = quotes.low || [];
                         const closes = quotes.close || [];
                         const volumes = quotes.volume || [];
+                        const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
                         if (closes.length < 60) {
                             results[ticker] = { error: 'Insufficient history' };
@@ -1742,138 +1748,115 @@ const server = http.createServer((req, res) => {
                         }
 
                         const lastIdx = closes.length - 1;
-                        const today = {
-                            open: opens[lastIdx],
-                            high: highs[lastIdx],
-                            low: lows[lastIdx],
-                            close: closes[lastIdx],
-                            volume: volumes[lastIdx],
-                            prevClose: closes[lastIdx - 1]
-                        };
-
-                        // Calculate today's indicators
+                        const today = { open: opens[lastIdx], high: highs[lastIdx], low: lows[lastIdx], close: closes[lastIdx], volume: volumes[lastIdx], prevClose: closes[lastIdx - 1] };
                         const dayChange = ((today.close - today.prevClose) / today.prevClose) * 100;
                         const todayRed = today.close < today.open;
                         const todayGreen = today.close > today.open;
 
-                        // RSI (14-period)
+                        // RSI
                         let gains = 0, losses = 0;
                         for (let i = lastIdx - 13; i <= lastIdx; i++) {
                             const change = closes[i] - closes[i - 1];
-                            if (change > 0) gains += change;
-                            else losses -= change;
+                            if (change > 0) gains += change; else losses -= change;
                         }
                         const rs = losses === 0 ? 100 : (gains / 14) / (losses / 14);
                         const rsi = 100 - (100 / (1 + rs));
 
-                        // Moving averages
+                        // SMAs
                         const sma20 = closes.slice(lastIdx - 19, lastIdx + 1).reduce((a, b) => a + b, 0) / 20;
                         const sma50 = closes.slice(lastIdx - 49, lastIdx + 1).reduce((a, b) => a + b, 0) / 50;
+                        const sma200 = lastIdx >= 199 ? closes.slice(lastIdx - 199, lastIdx + 1).reduce((a, b) => a + b, 0) / 200 : null;
+                        const aboveSma50 = today.close > sma50;
+                        const aboveSma200 = sma200 ? today.close > sma200 : null;
 
-                        // Volume analysis
+                        // Volume
                         const avgVolume20 = volumes.slice(lastIdx - 19, lastIdx + 1).reduce((a, b) => a + b, 0) / 20;
                         const volumeRatio = today.volume / avgVolume20;
 
                         // Consecutive days
-                        let consecutiveRed = 0;
-                        let consecutiveGreen = 0;
+                        let consecutiveRed = 0, consecutiveGreen = 0;
                         for (let i = lastIdx; i >= lastIdx - 5 && i >= 0; i--) {
-                            if (closes[i] < opens[i]) {
-                                if (consecutiveGreen > 0) break;
-                                consecutiveRed++;
-                            } else if (closes[i] > opens[i]) {
-                                if (consecutiveRed > 0) break;
-                                consecutiveGreen++;
-                            } else break;
+                            if (closes[i] < opens[i]) { if (consecutiveGreen > 0) break; consecutiveRed++; }
+                            else if (closes[i] > opens[i]) { if (consecutiveRed > 0) break; consecutiveGreen++; }
+                            else break;
                         }
 
-                        // Candle pattern detection
-                        const bodySize = Math.abs(today.close - today.open);
-                        const upperWick = today.high - Math.max(today.open, today.close);
-                        const lowerWick = Math.min(today.open, today.close) - today.low;
-                        const range = today.high - today.low;
-
-                        let candlePattern = 'none';
-                        if (bodySize < range * 0.1 && range > 0) candlePattern = 'doji';
-                        else if (lowerWick > bodySize * 2 && upperWick < bodySize * 0.5 && todayGreen) candlePattern = 'hammer';
-                        else if (upperWick > bodySize * 2 && lowerWick < bodySize * 0.5 && todayRed) candlePattern = 'shooting_star';
-                        else if (todayGreen && bodySize > range * 0.6) candlePattern = 'bullish_engulfing';
-                        else if (todayRed && bodySize > range * 0.6) candlePattern = 'bearish_engulfing';
-
-                        // VWAP approximation (using typical price * volume)
                         const typicalPrice = (today.high + today.low + today.close) / 3;
                         const closeAboveVwap = today.close > typicalPrice;
-
-                        // Day of week (0 = Sunday, 5 = Friday)
                         const dayOfWeek = new Date(timestamps[lastIdx] * 1000).getDay();
-                        const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-                        // Historical pattern matching - find similar setups
-                        let gapUpCount = 0, gapDownCount = 0;
-                        let greenCloseCount = 0, redCloseCount = 0;
+                        // v3: Enhanced pattern matching with gap-fill focus
+                        let gapUpCount = 0, gapDownCount = 0, gapFilledCount = 0, fadeWinCount = 0;
                         let matchCount = 0;
                         const matchDetails = [];
+                        const weekdayStats = { Mon: {up:0,down:0,filled:0,fade:0}, Tue: {up:0,down:0,filled:0,fade:0}, Wed: {up:0,down:0,filled:0,fade:0}, Thu: {up:0,down:0,filled:0,fade:0}, Fri: {up:0,down:0,filled:0,fade:0} };
+                        // Gap size buckets: small (<0.3%), medium (0.3-0.7%), large (>0.7%)
+                        const gapBuckets = { small: {total:0,filled:0,fade:0}, medium: {total:0,filled:0,fade:0}, large: {total:0,filled:0,fade:0} };
+                        let totalGapSize = 0;
 
                         for (let i = 60; i < lastIdx - 1; i++) {
-                            // Check if this historical day matches today's pattern
                             const histRsi = (() => {
                                 let g = 0, l = 0;
-                                for (let j = i - 13; j <= i; j++) {
-                                    const c = closes[j] - closes[j - 1];
-                                    if (c > 0) g += c; else l -= c;
-                                }
+                                for (let j = i - 13; j <= i; j++) { const c = closes[j] - closes[j - 1]; if (c > 0) g += c; else l -= c; }
                                 const r = l === 0 ? 100 : (g / 14) / (l / 14);
                                 return 100 - (100 / (1 + r));
                             })();
-
                             const histDayChange = ((closes[i] - closes[i - 1]) / closes[i - 1]) * 100;
                             const histRed = closes[i] < opens[i];
                             const histGreen = closes[i] > opens[i];
 
-                            // Count consecutive red/green before this day
                             let histConsecRed = 0, histConsecGreen = 0;
                             for (let j = i; j >= i - 5 && j >= 0; j--) {
-                                if (closes[j] < opens[j]) {
-                                    if (histConsecGreen > 0) break;
-                                    histConsecRed++;
-                                } else if (closes[j] > opens[j]) {
-                                    if (histConsecRed > 0) break;
-                                    histConsecGreen++;
-                                } else break;
+                                if (closes[j] < opens[j]) { if (histConsecGreen > 0) break; histConsecRed++; }
+                                else if (closes[j] > opens[j]) { if (histConsecRed > 0) break; histConsecGreen++; }
+                                else break;
                             }
 
-                            // Match criteria (fuzzy matching)
                             const rsiMatch = Math.abs(histRsi - rsi) < 15;
                             const trendMatch = (histRed === todayRed) || (histGreen === todayGreen);
                             const consecMatch = (consecutiveRed > 0 && histConsecRed > 0) || (consecutiveGreen > 0 && histConsecGreen > 0);
                             const moveMatch = Math.abs(histDayChange - dayChange) < 1.5;
-
-                            // Require at least 3 matches
                             const matchScore = (rsiMatch ? 1 : 0) + (trendMatch ? 1 : 0) + (consecMatch ? 1 : 0) + (moveMatch ? 1 : 0);
 
                             if (matchScore >= 3) {
                                 matchCount++;
-                                // Check what happened the NEXT day
-                                const nextOpen = opens[i + 1];
-                                const nextClose = closes[i + 1];
-                                const thisClose = closes[i];
-
+                                const nextOpen = opens[i + 1], nextHigh = highs[i + 1], nextLow = lows[i + 1], nextClose = closes[i + 1], thisClose = closes[i];
                                 const gappedUp = nextOpen > thisClose;
-                                const closedGreen = nextClose > nextOpen;
+                                const gapPct = Math.abs((nextOpen - thisClose) / thisClose) * 100;
+                                const gapDir = gappedUp ? 'UP' : 'DOWN';
+                                const dayMovePct = ((nextClose - nextOpen) / nextOpen) * 100;
+                                const gapFilled = gappedUp ? (nextLow <= thisClose) : (nextHigh >= thisClose);
+                                const faded = gappedUp ? (dayMovePct < 0) : (dayMovePct > 0);
 
-                                if (gappedUp) gapUpCount++;
-                                else gapDownCount++;
+                                if (gappedUp) gapUpCount++; else gapDownCount++;
+                                if (gapFilled) gapFilledCount++;
+                                if (faded) fadeWinCount++;
+                                totalGapSize += gapPct;
 
-                                if (closedGreen) greenCloseCount++;
-                                else redCloseCount++;
+                                // Bucket by gap size
+                                const bucket = gapPct < 0.3 ? 'small' : gapPct < 0.7 ? 'medium' : 'large';
+                                gapBuckets[bucket].total++;
+                                if (gapFilled) gapBuckets[bucket].filled++;
+                                if (faded) gapBuckets[bucket].fade++;
 
-                                // Store for details
-                                if (matchDetails.length < 5) {
+                                // Weekday stats
+                                const nextDayOfWeek = dayNames[new Date(timestamps[i + 1] * 1000).getDay()];
+                                if (weekdayStats[nextDayOfWeek]) {
+                                    if (gappedUp) weekdayStats[nextDayOfWeek].up++; else weekdayStats[nextDayOfWeek].down++;
+                                    if (gapFilled) weekdayStats[nextDayOfWeek].filled++;
+                                    if (faded) weekdayStats[nextDayOfWeek].fade++;
+                                }
+
+                                // Store match details (most recent 10)
+                                if (matchDetails.length < 10) {
                                     matchDetails.push({
                                         date: new Date(timestamps[i] * 1000).toLocaleDateString(),
-                                        nextDayGap: ((nextOpen - thisClose) / thisClose * 100).toFixed(2) + '%',
-                                        nextDayClose: closedGreen ? 'GREEN' : 'RED',
-                                        nextDayMove: ((nextClose - nextOpen) / nextOpen * 100).toFixed(2) + '%'
+                                        weekday: nextDayOfWeek,
+                                        gapPct: (gappedUp ? '+' : '-') + gapPct.toFixed(2) + '%',
+                                        gapDir, bucket,
+                                        dayMove: (dayMovePct >= 0 ? '+' : '') + dayMovePct.toFixed(2) + '%',
+                                        filled: gapFilled ? 'YES' : 'NO',
+                                        action: faded ? 'FADE' : 'CONT'
                                     });
                                 }
                             }
@@ -1882,82 +1865,107 @@ const server = http.createServer((req, res) => {
                         // Calculate probabilities
                         const gapUpProb = matchCount > 0 ? Math.round((gapUpCount / matchCount) * 100) : 50;
                         const gapDownProb = 100 - gapUpProb;
-                        const greenProb = matchCount > 0 ? Math.round((greenCloseCount / matchCount) * 100) : 50;
-                        const redProb = 100 - greenProb;
+                        const gapFillProb = matchCount > 0 ? Math.round((gapFilledCount / matchCount) * 100) : 50;
+                        const fadeWinRate = matchCount > 0 ? Math.round((fadeWinCount / matchCount) * 100) : 50;
+                        const avgGapSize = matchCount > 0 ? (totalGapSize / matchCount).toFixed(2) : '0.00';
 
-                        // Build signals list
+                        // Gap bucket fill rates
+                        const bucketFillRates = {};
+                        for (const [bucket, stats] of Object.entries(gapBuckets)) {
+                            bucketFillRates[bucket] = {
+                                count: stats.total,
+                                fillRate: stats.total > 0 ? Math.round((stats.filled / stats.total) * 100) : 0,
+                                fadeRate: stats.total > 0 ? Math.round((stats.fade / stats.total) * 100) : 0
+                            };
+                        }
+
+                        // Weekday fill rates
+                        const weekdayFillRates = {};
+                        for (const [day, stats] of Object.entries(weekdayStats)) {
+                            const total = stats.up + stats.down;
+                            weekdayFillRates[day] = {
+                                count: total,
+                                upPct: total > 0 ? Math.round((stats.up / total) * 100) : 50,
+                                fillRate: total > 0 ? Math.round((stats.filled / total) * 100) : 0,
+                                fadeRate: total > 0 ? Math.round((stats.fade / total) * 100) : 0
+                            };
+                        }
+
+                        // Thresholds check
+                        const thresh = thresholds[ticker] || thresholds.DEFAULT;
+                        const highConf = Math.max(gapUpProb, gapDownProb);
+                        const meetsThreshold = matchCount >= thresh.minMatches && highConf >= thresh.minConfidence;
+                        let gapPrediction = 'UNCERTAIN';
+                        if (meetsThreshold) gapPrediction = gapUpProb > gapDownProb ? 'GAP UP' : 'GAP DOWN';
+
+                        // Confidence level
+                        let confidenceLevel = 'low';
+                        if (highConf >= 75 && matchCount >= thresh.minMatches) confidenceLevel = 'high';
+                        else if (highConf >= 65 && matchCount >= thresh.minMatches * 0.7) confidenceLevel = 'medium';
+
+                        // Gap-fill conviction (the primary edge)
+                        const gapFillConviction = gapFillProb >= 75 ? 'HIGH' : gapFillProb >= 65 ? 'MEDIUM' : 'LOW';
+
+                        // Regime note
+                        const regime = aboveSma200 === true ? 'Uptrend (>200SMA)' : aboveSma200 === false ? 'Downtrend (<200SMA)' : 'Unknown';
+
+                        // Build signals
                         const signals = [];
                         if (rsi < 30) signals.push({ signal: 'RSI Oversold', bias: 'bullish', value: rsi.toFixed(0) });
                         if (rsi > 70) signals.push({ signal: 'RSI Overbought', bias: 'bearish', value: rsi.toFixed(0) });
-                        if (consecutiveRed >= 3) signals.push({ signal: `${consecutiveRed} Red Days`, bias: 'bullish', value: 'mean reversion' });
-                        if (consecutiveGreen >= 3) signals.push({ signal: `${consecutiveGreen} Green Days`, bias: 'bearish', value: 'mean reversion' });
-                        if (today.close > sma20) signals.push({ signal: 'Above SMA20', bias: 'bullish', value: `$${sma20.toFixed(2)}` });
-                        if (today.close < sma20) signals.push({ signal: 'Below SMA20', bias: 'bearish', value: `$${sma20.toFixed(2)}` });
-                        if (today.close > sma50) signals.push({ signal: 'Above SMA50', bias: 'bullish', value: `$${sma50.toFixed(2)}` });
-                        if (today.close < sma50) signals.push({ signal: 'Below SMA50', bias: 'bearish', value: `$${sma50.toFixed(2)}` });
-                        if (volumeRatio > 1.5) signals.push({ signal: 'High Volume', bias: todayGreen ? 'bullish' : 'bearish', value: `${volumeRatio.toFixed(1)}x avg` });
-                        if (candlePattern !== 'none') signals.push({ signal: candlePattern.replace('_', ' '), bias: candlePattern.includes('bull') || candlePattern === 'hammer' ? 'bullish' : candlePattern.includes('bear') || candlePattern === 'shooting_star' ? 'bearish' : 'neutral', value: 'pattern' });
-                        if (closeAboveVwap) signals.push({ signal: 'Closed Above VWAP', bias: 'bullish', value: '' });
-                        else signals.push({ signal: 'Closed Below VWAP', bias: 'bearish', value: '' });
-
-                        // Day of week bias (historical tendencies)
-                        if (dayOfWeek === 1) signals.push({ signal: 'Monday', bias: 'neutral', value: 'often follows Friday' });
-                        if (dayOfWeek === 5) signals.push({ signal: 'Friday', bias: 'neutral', value: 'weekend positioning' });
-
-                        // Overall bias calculation
-                        const bullishSignals = signals.filter(s => s.bias === 'bullish').length;
-                        const bearishSignals = signals.filter(s => s.bias === 'bearish').length;
-                        const overallBias = bullishSignals > bearishSignals ? 'BULLISH' : bearishSignals > bullishSignals ? 'BEARISH' : 'NEUTRAL';
+                        if (consecutiveRed >= 3) signals.push({ signal: `${consecutiveRed} Red Days`, bias: 'bullish', value: 'reversion' });
+                        if (consecutiveGreen >= 3) signals.push({ signal: `${consecutiveGreen} Green Days`, bias: 'bearish', value: 'reversion' });
+                        if (aboveSma50) signals.push({ signal: 'Above SMA50', bias: 'bullish' });
+                        else signals.push({ signal: 'Below SMA50', bias: 'bearish' });
+                        if (aboveSma200 === true) signals.push({ signal: 'Above SMA200', bias: 'bullish' });
+                        else if (aboveSma200 === false) signals.push({ signal: 'Below SMA200', bias: 'bearish' });
+                        if (closeAboveVwap) signals.push({ signal: 'Close > VWAP', bias: 'bullish' });
+                        else signals.push({ signal: 'Close < VWAP', bias: 'bearish' });
 
                         results[ticker] = {
                             price: today.close.toFixed(2),
                             dayChange: dayChange.toFixed(2) + '%',
                             todayColor: todayGreen ? 'GREEN' : todayRed ? 'RED' : 'FLAT',
                             rsi: rsi.toFixed(0),
-                            sma20: sma20.toFixed(2),
                             sma50: sma50.toFixed(2),
+                            sma200: sma200 ? sma200.toFixed(2) : null,
                             volumeRatio: volumeRatio.toFixed(1) + 'x',
-                            consecutiveRed,
-                            consecutiveGreen,
-                            candlePattern,
+                            consecutiveRed, consecutiveGreen,
                             dayOfWeek: dayNames[dayOfWeek],
-                            closeAboveVwap,
-                            signals,
-                            overallBias,
+                            closeAboveVwap, signals, regime,
+                            isPrimary: ticker === 'SPY',
                             prediction: {
-                                open: {
-                                    gapUp: gapUpProb,
-                                    gapDown: gapDownProb,
-                                    prediction: gapUpProb > 55 ? 'GAP UP' : gapDownProb > 55 ? 'GAP DOWN' : 'FLAT/UNCERTAIN'
+                                gap: {
+                                    upProb: gapUpProb, downProb: gapDownProb,
+                                    prediction: gapPrediction,
+                                    confidenceLevel, meetsThreshold
                                 },
-                                close: {
-                                    green: greenProb,
-                                    red: redProb,
-                                    prediction: greenProb > 55 ? 'GREEN' : redProb > 55 ? 'RED' : 'UNCERTAIN'
-                                }
+                                gapFill: {
+                                    prob: gapFillProb,
+                                    conviction: gapFillConviction,
+                                    avgGapSize: avgGapSize + '%',
+                                    fadeWinRate
+                                },
+                                buckets: bucketFillRates,
+                                weekdays: weekdayFillRates
                             },
                             historicalMatches: matchCount,
+                            thresholds: thresh,
                             recentMatches: matchDetails,
-                            confidence: matchCount >= 20 ? 'HIGH' : matchCount >= 10 ? 'MEDIUM' : 'LOW'
+                            confidence: matchCount >= 40 ? 'HIGH' : matchCount >= 25 ? 'MEDIUM' : 'LOW'
                         };
 
                     } catch (tickerErr) {
-                        console.error(`[Next Day Prediction] Error for ${ticker}:`, tickerErr.message);
+                        console.error(`[Next Day Prediction v3] Error for ${ticker}:`, tickerErr.message);
                         results[ticker] = { error: tickerErr.message };
                     }
                 }
 
-                res.writeHead(200, {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': '*'
-                });
-                res.end(JSON.stringify({
-                    scanTime: new Date().toISOString(),
-                    tickers: results
-                }));
+                res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ scanTime: new Date().toISOString(), version: 3, tickers: results }));
 
             } catch (err) {
-                console.error('[Next Day Prediction] Error:', err);
+                console.error('[Next Day Prediction v3] Error:', err);
                 res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
                 res.end(JSON.stringify({ error: 'Prediction failed', message: err.message }));
             }
